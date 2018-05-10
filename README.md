@@ -9,7 +9,7 @@ Event Manager consists of two processing loops handing events and work, respecti
 
 Events can be processed either synchronously or asynchronously in both stages of processing, independently.
 
-![Concept](https://bitbucket.org/neadwerx/event_manager/src/master/images/event_manager_concept.svg)
+![Concept](https://bitbucket.org/neadwerx/event_manager/src/master/images/event_manager_concept.png)
 
 # Usage
 
@@ -27,7 +27,7 @@ Results of actions are discarded.
 
 # Schema
 
-![Schema](https://bitbucket.org/neadwerx/event_manager/src/master/images/event_manager_schema.svg)
+![Schema](https://bitbucket.org/neadwerx/event_manager/src/master/images/event_manager_schema.png)
 
 ## Requirements:
 * PostgreSQL 9.4+
