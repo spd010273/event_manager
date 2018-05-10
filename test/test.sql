@@ -13,7 +13,7 @@ CREATE TABLE tb_a
 (
     a INTEGER PRIMARY KEY DEFAULT nextval('sq_a'),
     foo VARCHAR,
-    bar VARCHAR    
+    bar VARCHAR
 );
 
 INSERT INTO tb_a( foo, bar )
@@ -72,7 +72,7 @@ BEGIN
 
     RETURN;
 END
- $_$ 
+ $_$
     LANGUAGE plpgsql;
 
 INSERT INTO event_manager.tb_action

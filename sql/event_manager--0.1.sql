@@ -455,7 +455,7 @@ CREATE TRIGGER tr_handle_new_work_queue_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_handle_new_work_queue_item();
 
 CREATE FUNCTION @extschema@.fn_validate_function()
-RETURN TRIGGER AS
+RETURNS TRIGGER AS
  $_$
 BEGIN
     PERFORM *

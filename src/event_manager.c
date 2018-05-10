@@ -471,7 +471,6 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
     while( 1 )
     {
-
         int sock;
         fd_set input_mask;
         sock = PQsocket( conn );
@@ -494,6 +493,11 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
             return;
         }
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Handling notify"
+        );
 
         PQconsumeInput( conn );
 
@@ -581,6 +585,18 @@ void event_queue_handler( void )
         );
 
         _rollback_transaction();
+        return;
+    }
+
+    if( PQntuples( result ) <= 0 )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Event queue processor received spurious NOTIFY"
+        );
+
+        _rollback_transaction();
+        PQclear( result );
         return;
     }
 
@@ -768,8 +784,9 @@ void work_queue_handler( void )
     {
         _log(
             LOG_LEVEL_INFO,
-            "Received spurious NOTIFY"
+            "Work queue processor received spurious NOTIFY"
         );
+        _rollback_transaction();
         PQclear( result );
         return;
     }
