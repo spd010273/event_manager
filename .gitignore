@@ -1,0 +1,5 @@
+*.o
+event_manager
+*.so
+*.swp
+*.swo
