@@ -55,14 +55,16 @@
 
 /* Program Globals / Structs */
 // Global Variables
-PGconn * conn;
-char *   conninfo = NULL;
-char *   ext_schema = NULL;
+PGconn * conn                = NULL;
+char *   conninfo            = NULL;
+char *   ext_schema          = NULL;
 bool     cyanaudit_installed = false;
+bool     event_listener      = false;
+bool     work_listener       = false;
 
 // Signal Traps
 volatile sig_atomic_t got_sigterm = false;
-volatile sig_atomic_t got_sighup = false;
+volatile sig_atomic_t got_sighup  = false;
 
 /* Function Prototypes */
 void _parse_args( int, char ** );
@@ -111,7 +113,7 @@ void _parse_args( int argc, char ** argv )
 
     opterr = 0;
 
-    while( ( c = getopt( argc, argv, "U:p:d:h:v?" ) ) != -1 )
+    while( ( c = getopt( argc, argv, "U:p:d:h:v?EW" ) ) != -1 )
     {
         switch( c )
         {
@@ -132,9 +134,25 @@ void _parse_args( int argc, char ** argv )
             case 'v':
                 printf( "Event Manager, version %f\n", (float) VERSION );
                 exit( 0 );
+            case 'E':
+                event_listener = true;
+                break;
+            case 'W':
+                work_listener = true;
+                break;
             default:
                 _usage( "Invalid argument." );
         }
+    }
+
+    if( event_listener == true && work_listener == true )
+    {
+        _usage( "Event and Work queue processing modes are mutually exclusive" );
+    }
+
+    if( event_listener == false && work_listener == false )
+    {
+        _usage( "Need to instruct program to listen to events (-E) or work (-W)" );
     }
 
     if( port == NULL )
@@ -566,17 +584,17 @@ void event_queue_handler( void )
         return;
     }
 
-    transaction_label = get_column_value( 0, result, "transaction_label" );
+    transaction_label      = get_column_value( 0, result, "transaction_label" );
     execute_asynchronously = get_column_value( 0, result, "execute_asynchronously" );
-    action  = get_column_value( 0, result, "action" );
-    recorded = get_column_value( 0, result, "recorded" );
-    uid = get_column_value( 0, result, "uid" );
+    action                 = get_column_value( 0, result, "action" );
+    recorded               = get_column_value( 0, result, "recorded" );
+    uid                    = get_column_value( 0, result, "uid" );
 
-    ctid = get_column_value( 0, result, "ctid" );
-    work_item_query = get_column_value( 0, result, "work_item_query" );
-    event_table_work_item = get_column_value( 0, result, "event_table_work_item" );
-    op = get_column_value( 0, result, "op" );
-    pk_value = get_column_value( 0, result, "pk_value" );
+    ctid                   = get_column_value( 0, result, "ctid" );
+    work_item_query        = get_column_value( 0, result, "work_item_query" );
+    event_table_work_item  = get_column_value( 0, result, "event_table_work_item" );
+    op                     = get_column_value( 0, result, "op" );
+    pk_value               = get_column_value( 0, result, "pk_value" );
 
     work_item_query_copy = ( char * ) malloc(
         sizeof( char ) * strlen( work_item_query )
@@ -1491,8 +1509,14 @@ int main( int argc, char ** argv )
     PQclear( cyanaudit_result );
 
     // Entry for other subs here
-    _queue_loop( WORK_QUEUE_CHANNEL, &work_queue_handler );
-    _queue_loop( EVENT_QUEUE_CHANNEL, &event_queue_handler );
+    if( work_listener )
+    {
+        _queue_loop( WORK_QUEUE_CHANNEL, &work_queue_handler );
+    }
+    else if( event_listener )
+    {
+        _queue_loop( EVENT_QUEUE_CHANNEL, &event_queue_handler );
+    }
 
     if( conn != NULL )
     {

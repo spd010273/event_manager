@@ -7,6 +7,7 @@ static const char * usage_string =
         "    -p DB Port (default: 5432)\n"
         "    -h DB Host (default: localhost)\n"
         "    -d DB name (default: DB User)\n"
+        "    -E | -W Start Event or Work Queue Processor, respectively\n"
         "  [ -D debug mode\n"
         "    -v VERSION\n"
         "    -? HELP ] \n";
