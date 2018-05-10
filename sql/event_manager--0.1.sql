@@ -165,13 +165,11 @@ BEGIN
        INTO my_pk_value
       USING my_record;
 
-    RAISE INFO 'Got PK %', my_pk_value;
     EXECUTE 'SELECT ' || COALESCE( current_setting( '@extschema@.get_uid_function', TRUE ),
                         'NULL'
                     ) || '::INTEGER'
        INTO my_uid;
 
-    RAISE INFO 'Event for %.%', TG_TABLE_SCHEMA, TG_TABLE_NAME;
     FOR my_when_function,
         my_transaction_label,
         my_action,
@@ -191,7 +189,6 @@ BEGIN
                                AND et.table_name = TG_TABLE_NAME::VARCHAR
                                AND et.schema_name = TG_TABLE_SCHEMA::VARCHAR
                          ) LOOP
-        RAISE INFO 'Doin FOR LOOP';
         EXECUTE 'SELECT ' || my_when_function
              || '( $1::INTEGER, $2::INTEGER, $3::CHAR(1) )::BOOLEAN'
            INTO my_when_result
@@ -224,8 +221,6 @@ BEGIN
                             my_work_item_query,
                             my_action
                         );
-        ELSE
-            RAISE INFO 'When returned false';
         END IF;
     END LOOP;
     RETURN my_record;
@@ -307,7 +302,6 @@ DECLARE
     my_action       INTEGER;
 BEGIN
     my_is_async := TRUE;
-    RAISE INFO 'Execing event handler';
     SELECT COALESCE(
                NEW.execute_asynchronously,
                CASE WHEN lower( value ) LIKE '%t%'
@@ -322,12 +316,10 @@ BEGIN
      WHERE key = '@extschema@.execute_asynchronously';
 
     IF( my_is_async IS TRUE ) THEN
-        RAISE INFO 'NOTIFYING event_queue channel';
         NOTIFY new_event_queue_item;
         RETURN NEW;
     END IF;
 
-    RAISE INFO 'Continuing in synchronous mode';
     EXECUTE 'SELECT ' || COALESCE(
                 current_setting( '@extschema@.get_uid_function', TRUE ),
                 'NULL'
@@ -461,3 +453,34 @@ END
 CREATE TRIGGER tr_handle_new_work_queue_item
     AFTER INSERT ON @extschema@.tb_work_queue
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_handle_new_work_queue_item();
+
+CREATE FUNCTION @extschema@.fn_validate_function()
+RETURN TRIGGER AS
+ $_$
+BEGIN
+    PERFORM *
+       FROM pg_proc p
+ INNER JOIN pg_namespace n
+         ON n.oid = p.pronamespace
+      WHERE regexp_replace( NEW.when_function, '^.*\.',  '' ) = p.proname::VARCHAR
+        AND (
+                (
+                    regexp_replace( NEW.when_function, '\..*$', '' )
+                  = regexp_replace( NEW.when_function, '^.*\.', '' )
+              AND n.nspname::VARCHAR = 'public'
+                )
+             OR regexp_replace( NEW.when_function, '\..*$', '' ) = n.nspname::VARCHAR
+            );
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Function % is not in catalog', NEW.when_function;
+    END IF;
+
+    RETURN NEW;
+END
+ $_$
+    LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
+
+CREATE TRIGGER tr_validate_when_function
+    BEFORE INSERT OR UPDATE OF when_function ON @extschema@.tb_event_table_work_item
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_function();
+
