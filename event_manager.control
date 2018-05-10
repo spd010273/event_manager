@@ -1,0 +1,7 @@
+# Event Manager Extension
+comment = 'Event Manager - Event Trigger Extension of PostgreSQL'
+default_version = '0.1'
+relocatable = false
+requires = 'plpgsql'
+superuser = true
+schema = 'event_manager'
