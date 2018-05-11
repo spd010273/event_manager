@@ -32,6 +32,7 @@ Results of actions are discarded.
 ## Requirements:
 * PostgreSQL 9.4+
 * gcc
+* libcurl
 * PostgreSQL development packages
   * postgresql<version>-devel for CentOS / RHEL
   * libpq-dev and postgresql-server-dev-<version> for Debian / Ubuntu

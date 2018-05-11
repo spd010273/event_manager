@@ -110,6 +110,38 @@ INSERT INTO tb_a
 
 SELECT pg_sleep(5);
 --will fail if process is not running or failed
-SELECT 50 / ( 50- COUNT(*) )
+SELECT CASE WHEN 50 - ( COUNT(*) ) = 0
+            THEN 'Event Queue test failed - is the queue processor running?'
+            ELSE 'Event queue test passed.'
+             END AS status
   FROM tb_b;
 
+INSERT INTO event_manager.tb_action
+            (
+                uri,
+                static_parameters
+            )
+     VALUES
+            (
+                'http://ises.chris.neadwerx.com/api/current/locations',
+                '{"number":"121","testparam2":"val2"}'::JSONB
+            );
+
+UPDATE event_manager.tb_event_table_work_item
+   SET action = a.action
+  FROM event_manager.tb_action a
+ WHERE a.uri IS NOT NULL;
+
+SELECT 'Causing event' AS status;
+INSERT INTO tb_a
+            (
+                foo,
+                bar
+            )
+     VALUES
+            (
+                'uritest',
+                'uritest'
+            );
+
+SELECT pg_sleep(5);

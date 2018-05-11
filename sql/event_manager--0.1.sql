@@ -25,8 +25,10 @@ CREATE TABLE @extschema@.tb_action
     label               JSONB,
     query               VARCHAR,
     uri                 VARCHAR,
+    method              VARCHAR(4),
     static_parameters   JSONB,
-    CHECK( uri IS NOT NULL OR query IS NOT NULL )
+    CHECK( uri IS NOT NULL OR query IS NOT NULL ),
+    CHECK( ( method IN( 'PUT', 'POST', 'GET' ) ) )
 );
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;

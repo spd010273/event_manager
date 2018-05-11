@@ -1,5 +1,6 @@
 /* TODO:
  *      - Double check that results are PQclear'd and mallocs are free'd
+ *      - implement curling
  */
 
 // Compile with -DDEBUG to get debug messages
@@ -20,7 +21,8 @@
 #include <time.h>
 #include <signal.h>
 
-#include "lib/queries.h"
+#include <curl/curl.h>
+#include "lib/strings.h"
 
 /* Constants */
 #define VERSION 0.1
@@ -61,6 +63,8 @@ char *   ext_schema          = NULL;
 bool     cyanaudit_installed = false;
 bool     event_listener      = false;
 bool     work_listener       = false;
+bool     enable_curl         = false;
+CURL *   curl_handle         = NULL;
 
 // Signal Traps
 volatile sig_atomic_t got_sigterm = false;
@@ -77,9 +81,10 @@ void work_queue_handler( void );
 void event_queue_handler( void );
 bool execute_action( PGconn *, PGresult *, int );
 bool execute_action_query( PGconn *, char *, char *, char *, char *, char *, char * );
-bool execute_remote_uri_call( PGconn *,  char *, char *, char * );
+bool execute_remote_uri_call( PGconn *,  char *, char *, char *, char * );
 bool set_uid( char * );
 PGresult * get_parameters( PGconn *, char *, char * );
+static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
 PGresult * _execute_query( char *, char **, int, bool );
@@ -101,15 +106,20 @@ void __sighup( int );
 int main( int, char ** );
 
 
+/* Structures */
+struct curl_response {
+    char * pointer;
+    size_t size;
+};
+
 /* Functions */
 void _parse_args( int argc, char ** argv )
 {
+    int    c;
     char * username = NULL;
     char * dbname   = NULL;
     char * port     = NULL;
     char * hostname = NULL;
-
-    int c;
 
     opterr = 0;
 
@@ -211,13 +221,14 @@ void _usage( char * message )
 void _log( char * log_level, char * message, ... )
 {
     va_list args;
-    FILE * output_handle;
-    va_start( args, message );
+    FILE *  output_handle;
 
     if( message == NULL )
     {
         return;
     }
+
+    va_start( args, message );
 
     if(
         strcmp( log_level, LOG_LEVEL_WARNING ) == 0 ||
@@ -276,11 +287,11 @@ void _log( char * log_level, char * message, ... )
 PGresult * _execute_query( char * query, char ** params, int param_count, bool transaction_mode )
 {
     PGresult * result;
-    int retry_counter = 0;
-    int last_backoff_time = 0;
-    char * last_sql_state = NULL;
+    int        retry_counter     = 0;
+    int        last_backoff_time = 0;
+    char *     last_sql_state    = NULL;
 #ifdef DEBUG
-    int i;
+    int        i;
 #endif
 
     if( conn == NULL )
@@ -429,7 +440,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count, bool t
 void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 {
     PGnotify * notify = NULL;
-    char * listen_command;
+    char *     listen_command;
     PGresult * listen_result;
 
     listen_command = ( char * ) malloc(
@@ -559,7 +570,7 @@ void event_queue_handler( void )
     char * parameters;
     char * work_item_query_copy;
     char * params[9];
-    int i;
+    int    i;
 
     if( !_begin_transaction() )
     {
@@ -567,6 +578,7 @@ void event_queue_handler( void )
             LOG_LEVEL_ERROR,
             "Failed to start event dequeue transaction"
         );
+
         return;
     }
 
@@ -585,6 +597,7 @@ void event_queue_handler( void )
         );
 
         _rollback_transaction();
+
         return;
     }
 
@@ -597,6 +610,7 @@ void event_queue_handler( void )
 
         _rollback_transaction();
         PQclear( result );
+
         return;
     }
 
@@ -622,6 +636,7 @@ void event_queue_handler( void )
             LOG_LEVEL_ERROR,
             "Failed to allocate memory to generate work_items"
         );
+
         _rollback_transaction();
         PQclear( result );
         return;
@@ -629,11 +644,35 @@ void event_queue_handler( void )
 
     strcpy( work_item_query_copy, work_item_query );
 
-    work_item_query_copy = _regexp_replace( work_item_query_copy, "[?]event_table_work_item[?]", event_table_work_item );
-    work_item_query_copy = _regexp_replace( work_item_query_copy, "[?]uid[?]", uid );
-    work_item_query_copy = _regexp_replace( work_item_query_copy, "[?]op[?]", op );
-    work_item_query_copy = _regexp_replace( work_item_query_copy, "[?]pk_value[?]", pk_value );
-    work_item_query_copy = _regexp_replace( work_item_query_copy, "[?]recorded[?]", recorded );
+    work_item_query_copy = _regexp_replace(
+        work_item_query_copy,
+        "[?]event_table_work_item[?]",
+        event_table_work_item
+    );
+
+    work_item_query_copy = _regexp_replace(
+        work_item_query_copy,
+        "[?]uid[?]",
+        uid
+    );
+
+    work_item_query_copy = _regexp_replace(
+        work_item_query_copy,
+        "[?]op[?]",
+        op
+    );
+
+    work_item_query_copy = _regexp_replace(
+        work_item_query_copy,
+        "[?]pk_value[?]",
+        pk_value
+    );
+
+    work_item_query_copy = _regexp_replace(
+        work_item_query_copy,
+        "[?]recorded[?]",
+        recorded
+    );
 
     if( work_item_query_copy == NULL )
     {
@@ -676,7 +715,7 @@ void event_queue_handler( void )
     for( i = 0; i < PQntuples( work_item_result ); i++ )
     {
         parameters = get_column_value( i, work_item_result, "parameters" );
-        params[0] = parameters;
+        params[0]  = parameters;
 
         insert_result = _execute_query(
             ( char * ) new_work_item_query,
@@ -748,10 +787,15 @@ void work_queue_handler( void )
     PGresult * result;
     PGresult * delete_result;
 
-    bool action_result;
-    int row_count = 0;
-    int i;
+    bool   action_result;
+    int    row_count = 0;
+    int    i;
     char * params[6];
+
+    _log(
+        LOG_LEVEL_DEBUG,
+        "handling work queue item"
+    );
 
     /* Start transaction */
     if( !_begin_transaction() )
@@ -801,6 +845,11 @@ void work_queue_handler( void )
         params[5] = get_column_value( i, result, "ctid" );
 
         /* Get detailed information about action, get parameter list */
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Executing action"
+        );
+
         action_result = execute_action( conn, result, i );
 
         if( action_result == false )
@@ -824,6 +873,7 @@ void work_queue_handler( void )
                 LOG_LEVEL_ERROR,
                 "Failed to flush work queue item"
             );
+
             PQclear( result );
             _rollback_transaction();
             return;
@@ -840,6 +890,7 @@ void work_queue_handler( void )
             "Failed to commit work queue transaction: %s",
             PQerrorMessage( conn )
         );
+
         _rollback_transaction();
     }
 
@@ -881,13 +932,45 @@ bool is_column_null( int row, PGresult * result, char * column_name )
     return false;
 }
 
-bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * parameters )
+static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b, void * user_p )
 {
-    int malloc_size = 0;
+    size_t real_size;
+    struct curl_response * response_page;
+
+    response_page = (struct curl_response *) user_p;
+
+    real_size = size * n_mem_b;
+
+    response_page->pointer = realloc(
+        response_page->pointer,
+        response_page->size + real_size + 1
+    );
+
+    if( response_page->pointer == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate enough memory for URI call"
+        );
+
+        return 0;
+    }
+
+    memcpy( &( response_page->pointer[ response_page->size ] ), contents, real_size );
+    response_page->size += real_size;
+    response_page->pointer[response_page->size] = 0;
+
+    return real_size;
+}
+
+bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * method, char * parameters )
+{
+    int malloc_size         = 0;
     int parameter_row_count = 0;
     int j;
 
     PGresult * jsonb_result;
+    CURLcode   response;
 
     char * remote_call;
     char * param_list;
@@ -895,8 +978,11 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * p
     char * value;
 
     bool first_param_pass = true;
+    struct curl_response write_buffer;
 
-    param_list = ( char * ) malloc( sizeof( char ) * 2 );
+    malloc_size = 2;
+
+    param_list = ( char * ) malloc( sizeof( char ) * malloc_size );
 
     if( param_list == NULL )
     {
@@ -924,9 +1010,19 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * p
     {
         key   = get_column_value( j, jsonb_result, "key" );
         value = get_column_value( j, jsonb_result, "value" );
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Reallocating memory for %s:%s",
+            key,
+            value
+        );
         // Reallocate the string to contain ?... &<key>=<value>
-        malloc_size = strlen( key ) + strlen( value ) + 1;
-
+        malloc_size += strlen( key ) + strlen( value ) + 1;
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Malloc size is: %d",
+            malloc_size
+        );
         if( first_param_pass == false )
         {
             malloc_size++;
@@ -977,7 +1073,7 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * p
     }
 
     strcpy( remote_call, uri );
-    strcpy( remote_call, param_list );
+    strcat( remote_call, param_list );
     free( param_list );
 
     _log(
@@ -986,10 +1082,112 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * p
         remote_call
     );
 
-    _log(
-        LOG_LEVEL_WARNING,
-        "URI calls are not implemented :("
-    );
+    if( enable_curl )
+    {
+        //Get: CURLOPT_HTTPGET
+        //Post: CURLOPT_POST
+        //Put: CURLOPT_PUT
+        _log( LOG_LEVEL_DEBUG, "Curl is enabled, setting method to %s", method );
+        if( strcmp( method, "GET" ) == 0 )
+        {
+            _log( LOG_LEVEL_DEBUG, "Setting GET method" );
+            response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1 );
+        }
+        else if( strcmp( method, "PUT" ) == 0 )
+        {
+            _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
+            response = curl_easy_setopt( curl_handle, CURLOPT_PUT, 1 );
+        }
+        else if( strcmp( method, "POST" ) == 0 )
+        {
+            _log( LOG_LEVEL_DEBUG, "Setting POST method" );
+            response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1 );
+        }
+        else
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Unsupported method: %s",
+                method
+            );
+
+            return false;
+        }
+
+        if( response != CURLE_OK )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to set curl method: %s",
+                curl_easy_strerror( response )
+            );
+            return false;
+        }
+
+        // Initialize buffer
+        write_buffer.pointer = malloc( 1 );
+        write_buffer.size = 0;
+
+        _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
+        response = curl_easy_setopt( curl_handle, CURLOPT_URL, remote_call );
+        _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
+        response = curl_easy_setopt(
+            curl_handle,
+            CURLOPT_WRITEFUNCTION,
+            _curl_write_callback
+        );
+
+        response = curl_easy_setopt(
+            curl_handle,
+            CURLOPT_WRITEDATA,
+            ( void * ) &write_buffer
+        );
+
+        if( response == CURLE_OK )
+        {
+            response = curl_easy_perform( curl_handle );
+        }
+
+        if( response != CURLE_OK )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed %s %s: %s",
+                method,
+                remote_call,
+                curl_easy_strerror( response )
+            );
+
+            free( write_buffer.pointer );
+            free( remote_call );
+            return false;
+        }
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Got response: '%s'",
+            write_buffer.pointer
+        );
+
+        if( write_buffer.pointer != NULL )
+        {
+            free( write_buffer.pointer );
+        }
+
+        free( remote_call );
+        return true;
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Could not make remote API call: %s, curl is disabled",
+            remote_call
+        );
+
+        free( remote_call );
+        return false;
+    }
 
     free( remote_call );
     return true;
@@ -1116,17 +1314,18 @@ PGresult * get_parameters( PGconn * conn, char * action, char * parameters )
 bool execute_action( PGconn * conn, PGresult * result, int row )
 {
     PGresult * action_result;
-    bool execute_action_result;
+    bool       execute_action_result;
 
-    char * parameters = NULL;
-    char * uid = NULL;
-    char * recorded = NULL;
+    char * parameters        = NULL;
+    char * uid               = NULL;
+    char * recorded          = NULL;
     char * transaction_label = NULL;
-    char * action = NULL;
+    char * action            = NULL;
     char * params[1];
 
-    char * query = NULL;
-    char * uri   = NULL;
+    char * query  = NULL;
+    char * uri    = NULL;
+    char * method = NULL;
 
     parameters        = get_column_value( row, result, "parameters" );
     uid               = get_column_value( row, result, "uid" );
@@ -1165,11 +1364,17 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
         return false;
     }
 
-    query = get_column_value( 0, action_result, "query" );
-    uri   = get_column_value( 0, action_result, "uri" );
+    query  = get_column_value( 0, action_result, "query" );
+    uri    = get_column_value( 0, action_result, "uri" );
+    method = get_column_value( 0, action_result, "method" );
 
     if( is_column_null( 0, action_result, "query" ) == false )
     {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Executing action query"
+        );
+
         execute_action_result = execute_action_query(
             conn,
             query,
@@ -1187,7 +1392,12 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
     }
     else if( is_column_null( 0, action_result, "uri" ) == false )
     {
-        execute_action_result = execute_remote_uri_call( conn, uri, action, parameters );
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Executing API call"
+        );
+
+        execute_action_result = execute_remote_uri_call( conn, uri, action, method, parameters );
     }
     else
     {
@@ -1206,7 +1416,7 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
 void _cyanaudit_integration( PGconn * conn, char * transaction_label )
 {
     PGresult * cyanaudit_result;
-    char * param[1];
+    char *     param[1];
     param[0] = transaction_label;
 
     cyanaudit_result = _execute_query(
@@ -1233,11 +1443,13 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
 {
     // Function assumes you've malloc'd *string, since it will need to be
     // resized as replacements happen
-    regex_t regex;
+    regex_t    regex;
     regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char * temp_string;
-    int bind_length = 0;
-    int reg_result, i, j;
+    char *     temp_string;
+    int        bind_length = 0;
+    int        reg_result;
+    int        i;
+    int        j;
 
     if( string == NULL )
     {
@@ -1245,8 +1457,10 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
             LOG_LEVEL_ERROR,
             "_regexp_replace received NULL string arg"
         );
+
         return NULL;
     }
+
     reg_result = regcomp( &regex, pattern, REG_EXTENDED );
 
     if( reg_result )
@@ -1256,6 +1470,7 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
             "Error compiling regular expression '%s'",
             pattern
         );
+
         return string;
     }
 
@@ -1277,6 +1492,7 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
             }
 
             bind_length = matches[j].rm_eo - matches[j].rm_so;
+
             temp_string = ( char * ) malloc(
                 sizeof( char )
               * ( strlen( string ) -  bind_length + strlen( replace ) )
@@ -1294,8 +1510,11 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
             strncpy( temp_string, string, matches[j].rm_so );
             strcat( temp_string, replace );
             strcat( temp_string, ( char * ) ( string + matches[j].rm_eo ) );
+
             free( string );
+
             string = temp_string;
+
             temp_string = NULL;
         }
     }
@@ -1376,9 +1595,10 @@ bool _begin_transaction( void )
 bool set_uid( char * uid )
 {
     PGresult * uid_function_result;
-    char * params[1];
-    char * uid_function_name;
-    char * set_uid_query;
+    char *     params[1];
+    char *     uid_function_name;
+    char *     set_uid_query;
+
     params[0] = SET_UID_GUC_NAME;
 
     uid_function_result = _execute_query(
@@ -1404,11 +1624,16 @@ bool set_uid( char * uid )
             LOG_LEVEL_ERROR,
             "Set UID function result is NULL"
         );
+
         PQclear( uid_function_result );
         return false;
     }
 
-    uid_function_name = get_column_value( 0, uid_function_result, "uid_function" );
+    uid_function_name = get_column_value(
+        0,
+        uid_function_result,
+        "uid_function"
+    );
 
     set_uid_query = ( char * ) malloc(
         sizeof( char )
@@ -1425,7 +1650,9 @@ bool set_uid( char * uid )
 
     strcpy( set_uid_query, "SELECT " );
     strcat( set_uid_query, uid_function_name );
+
     PQclear( uid_function_result );
+
     set_uid_query = _regexp_replace( set_uid_query, "[?]uid[?]", uid );
 
     uid_function_result = _execute_query(
@@ -1455,12 +1682,30 @@ int main( int argc, char ** argv )
 {
     PGresult * result;
     PGresult * cyanaudit_result;
+    char *     params[1];
 
     int random_ind = 4; // determined by dice roll
-    int row_count = 0;
-    char * params[1];
+    int row_count  = 0;
+
     //Crapily seed PRNG for backoff of connection attempts on DB failure
     srand( random_ind * time(0) );
+    curl_handle = curl_easy_init();
+
+    if( curl_handle != NULL  )
+    {
+        enable_curl = true;
+        curl_easy_setopt( curl_handle, CURLOPT_NOSIGNAL, 1  );
+        curl_easy_setopt( curl_handle, CURLOPT_USERAGENT, ( char * ) user_agent );
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "CURL failed to initialize. Disabling"
+        );
+
+        enable_curl = false;
+    }
 
     // Setup Signal Handlers
     signal ( SIGHUP, __sighup );
@@ -1541,6 +1786,12 @@ int main( int argc, char ** argv )
     }
 
     free( conninfo );
+
+    if( enable_curl )
+    {
+        curl_easy_cleanup( curl_handle );
+    }
+
     return 0;
 }
 

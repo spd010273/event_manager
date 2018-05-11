@@ -1,11 +1,11 @@
-LIBDIR     = $(shell pg_config --libdir)
-INCLUDEDIR = $(shell pg_config --includedir)
-CC         = gcc
-LIBS       = -lm -lpq
-CFLAGS     = -I./src/ -I./src/lib/ -I$(INCLUDEDIR)
+PGLIBDIR     = $(shell pg_config --libdir)
+PGINCLUDEDIR = $(shell pg_config --includedir)
+CC           = gcc
+LIBS         = -lm -lpq -lcurl
+CFLAGS       = -I./src/ -I./src/lib/ -I$(PGINCLUDEDIR)
 
 event_manager: src/event_manager.o
-	$(CC) -o event_manager src/event_manager.o -I./src/ -I./src/lib/ -L$(LIBDIR) -lm -lpq
+	$(CC) -o event_manager src/event_manager.o -I./src/ -I./src/lib/ -L$(PGLIBDIR) -lm -lpq -lcurl
 
 EXTENSION   = event_manager
 EXTVERSION  = 0.1
