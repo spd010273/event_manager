@@ -40,6 +40,7 @@ INNER JOIN event_manager.tb_event_table et
 ```
 
 Some guidelines to work queries:
+
 * Parameters are 'bound' in using a regular expression in the form of \?key\? or [?]key[?]
 * Typecasting is strongly recommended, as translating from JSONB types to SQL types is best-effort (in PostgreSQL) and non existant (in this script)
 * It goes without saying that due to this, there is a real SQL injection risk if you allow users to insert directly into these tables
