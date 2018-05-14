@@ -67,7 +67,7 @@ static const char * get_work_queue_item =
 static const char * delete_work_queue_item =
     "DELETE FROM " EXTENSION_NAME ".tb_work_queue "
     "      WHERE parameters::TEXT IS NOT DISTINCT FROM $1::JSONB::TEXT "
-    "        AND uid = $2::INTEGER "
+    "        AND uid IS NOT DISTINCT FROM $2::INTEGER "
     "        AND recorded = $3::TIMESTAMP "
     "        AND transaction_label IS NOT DISTINCT FROM $4::VARCHAR "
     "        AND action = $5::INTEGER "

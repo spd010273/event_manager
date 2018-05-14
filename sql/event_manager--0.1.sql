@@ -91,6 +91,7 @@ BEGIN
     END IF;
 
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || NEW.key || ' = ''' || NEW.value || '''';
+    EXECUTE 'SET ' || NEW.key || ' = ''' || NEW.value || '''';
     RETURN NEW;
 END
  $_$
@@ -330,9 +331,9 @@ BEGIN
 
     my_query := regexp_replace( NEW.work_item_query, '\?pk_value\?', NEW.pk_value::VARCHAR, 'g' );
     my_query := regexp_replace( my_query, '\?recorded\?', NEW.recorded::VARCHAR, 'g' );
-    my_query := regexp_replace( my_query, '\?uid\?', NEW.uid::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?uid\?', quote_nullable( NEW.uid::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?op\?', NEW.op::VARCHAR, 'g' );
-    my_query := regexp_replace( my_query, '\?work_item_event_table\?', NEW.work_item_event_table::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?event_table_work_item\?', NEW.event_table_work_item::VARCHAR, 'g' );
 
     FOR my_parameters IN EXECUTE my_query LOOP
         INSERT INTO @extschema@.tb_work_queue
@@ -354,6 +355,17 @@ BEGIN
                         my_is_async
                     );
     END LOOP;
+
+    DELETE FROM @extschema@.tb_event_queue
+          WHERE event_table_work_item IS NOT DISTINCT FROM NEW.event_table_work_item
+            AND uid IS NOT DISTINCT FROM NEW.uid
+            AND recorded IS NOT DISTINCT FROM NEW.recorded
+            AND pk_value IS NOT DISTINCT FROM NEW.pk_value
+            AND op IS NOT DISTINCT FROM NEW.op
+            AND execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously
+            AND work_item_query IS NOT DISTINCT FROM NEW.work_item_query
+            AND transaction_label IS NOT DISTINCT FROM NEW.transaction_label
+            AND action IS NOT DISTINCT FROM NEW.action;
 
     RETURN NULL;
 END
@@ -386,43 +398,42 @@ BEGIN
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_work_queue_item;
-        RETURN NEW;
+        RETURN NULL;
     END IF;
 
     SELECT static_parameters,
            query
       INTO my_static_parameters,
            my_query
-      FROM tb_action
-     WHERE action = NEW.action
-       AND uri IS NOT NULL;
+      FROM @extschema@.tb_action
+     WHERE action = NEW.action;
 
     IF( my_query IS NULL ) THEN
         RAISE NOTICE 'Cannot execute API endpoint call in synchronous mode!';
         NOTIFY new_work_queue_item;
-        RETURN NEW;
+        RETURN NULL;
     END IF;
 
     EXECUTE 'SELECT ' || COALESCE(
                 regexp_replace(
-                    current_setting( '@extschema@.set_uid_function', TRUE ),
+                    COALESCE( current_setting( '@extschema@.set_uid_function', TRUE ), 'NULL' ),
                     '\?uid\?',
-                    NEW.uid,
+                    quote_nullable( NEW.uid ),
                     'g'
                 ),
                 'NULL'
             );
 
     my_query := regexp_replace( my_query, '\?recorded\?', NEW.recorded::VARCHAR, 'g' );
-    my_query := regexp_replace( my_query, '\?uid\?', NEW.uid::VARCHAR, 'g' );
-    my_query := regexp_replace( my_query, '\?transaction_label\?', NEW.transaction_label::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?uid\?', quote_nullable( NEW.uid::VARCHAR ), 'g' );
+    my_query := regexp_replace( my_query, '\?transaction_label\?', quote_nullable( NEW.transaction_label::VARCHAR ), 'g' );
 
     FOR my_key, my_value IN(
                             SELECT key,
                                    value
                               FROM jsonb_each_text( NEW.parameters )
                            ) LOOP
-        my_query := regexp_replace( my_query, '\?' || my_key || '\?', my_value, 'g' );
+        my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
 
     FOR my_key, my_value IN(
@@ -430,7 +441,7 @@ BEGIN
                                    value
                               FROM jsonb_each_text( my_static_parameters )
                            ) LOOP
-        my_query := regexp_replace( my_query, '\?' || my_key || '\?', my_value, 'g' );
+        my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
 
     EXECUTE my_query;
@@ -447,6 +458,13 @@ BEGIN
           USING NEW.transaction_label;
     END IF;
 
+    DELETE FROM @extschema@.tb_work_queue
+          WHERE parameters::VARCHAR IS NOT DISTINCT FROM NEW.parameters::VARCHAR
+            AND action IS NOT DISTINCT FROM NEW.action
+            AND uid IS NOT DISTINCT FROM NEW.uid
+            AND recorded IS NOT DISTINCT FROM NEW.recorded
+            AND transaction_label IS NOT DISTINCT FROM NEW.transaction_label
+            AND execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously;
     RETURN NULL;
 END
  $_$
