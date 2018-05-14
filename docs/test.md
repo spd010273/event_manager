@@ -1,7 +1,7 @@
 Event Manager Tests
 ===================
 
-# Running
+# Preparation
 
 The tests are implemented using both Perl and SQL. To run testing, the following is required:
 
@@ -29,3 +29,13 @@ install <library>
 These tests assume this is a development system, and will terminate running instances of event_manager daemons in order to test asynchronous mode.
 
 It goes without saying that this should not be run against a production environment
+
+# Running
+
+Tests can be ran using the run_tests.pl script:
+
+```bash
+./run_tests.pl -U <username> -p <port> -h <hostname> -d <dbname>
+```
+
+It will return an itemized list of passed tests, stopping on the first failure
