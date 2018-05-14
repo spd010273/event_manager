@@ -90,7 +90,7 @@ BEGIN
         RAISE EXCEPTION '% is not an extension GUC and cannot be modified using this table', NEW.key;
     END IF;
 
-    EXECUTE 'ALTER DATABASE ' || current_database() || ' SET ' || NEW.key || ' = ''' || NEW.value || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || NEW.key || ' = ''' || NEW.value || '''';
     RETURN NEW;
 END
  $_$
