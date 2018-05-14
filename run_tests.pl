@@ -25,6 +25,10 @@ my $dbname;
 my $port;
 my $hostname;
 my $debug = 0;
+my @children;
+
+my $manager_running = 0;
+my $manager_should_be_running = 0;
 
 sub usage(;$)
 {
@@ -82,6 +86,20 @@ sub run_test($) :Export(:DEFAULT)
 
     while( my $line = <$file_handle> )
     {
+        if( $line =~ /^--require:\s?/ )
+        {
+            my $requirement = $line;
+            $requirement =~ s/^--require:\s?//;
+
+            if( $requirement =~ /event_manager/ )
+            {
+                $manager_should_be_running = 1;
+                unless( check_event_manager_running( 1 ) )
+                {
+                    return { result => 0, result_text => 'Event and/or Work processors not running' };
+                }
+            }
+        }
         $sql .= $line;
     }
 
@@ -168,6 +186,106 @@ sub get_tests() :Export(:DEFAULT)
     return \@test_files;
 }
 
+sub check_event_manager_running(;$)
+{
+    my ( $start_process ) = validate_pos(
+        @_,
+        {
+            type => SCALAR,
+            optional => 1,
+        },
+    );
+
+    system( 'ps aux | grep event_manager &> /tmp/ps_result.txt' );
+
+    my $file;
+    my $file_contents = '';
+
+    open( $file, "</tmp/ps_result.txt" );
+
+    my $event_processor_running = 0;
+    my $work_processor_running = 0;
+
+    while( my $line = <$file> )
+    {
+        if( $line =~ /\sgrep\s/ )
+        {
+            next;
+        }
+
+        if( $line =~ /\s-E\s/ and $line =~ /\s-d\s$dbname\s/ )
+        {
+            $event_processor_running = 1;
+        }
+
+        if( $line =~ /\s-W\s/ and $line =~ /\s-d\s$dbname\s/ )
+        {
+            $work_processor_running = 1;
+        }
+    }
+
+    if( $work_processor_running and $event_processor_running )
+    {
+        return 1;
+    }
+
+    if( $start_process )
+    {
+        # Do the thing
+        my $startflags = [];
+        unless( $work_processor_running )
+        {
+            push( @$startflags, '-W' );
+        }
+
+        unless( $event_processor_running )
+        {
+            push( @$startflags, '-E' );
+        }
+
+        foreach my $flag( @$startflags )
+        {
+            my $log = $flag;
+            $log =~ s/^-//;
+            my $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
+            my $pid = fork();
+
+            if( not defined( $pid ) )
+            {
+                croak 'Fork failed.';
+            }
+            elsif( $pid == 0 )
+            {
+                # child
+                start_process( $command );
+                exit 0;
+            }
+            else
+            {
+                push( @children, $pid );
+            }
+        }
+
+        if( &check_event_manager_running() )
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+sub start_process($)
+{
+    my( $command ) = validate_pos(
+        @_,
+        { type => SCALAR },
+    );
+
+    system( $command );
+    exit 0;
+}
+
 ## MAIN PROGRAM
 our( $opt_d, $opt_h, $opt_U, $opt_p, $opt_l, $opt_v, $opt_D );
 usage( 'invalid arguments' ) unless( getopts( 'd:U:p:h:lvD' ) );
@@ -237,6 +355,10 @@ unless( defined $hostname and length $hostname > 0 )
 }
 
 my $tests = get_tests();
+if( check_event_manager_running() and not $manager_should_be_running )
+{
+    croak 'Please stop the event_manager process(es) for testing';
+}
 
 foreach my $test( @$tests )
 {
@@ -246,12 +368,24 @@ foreach my $test( @$tests )
     {
         print "FAILED: $test\n";
         print "    $result->{error_text}\n" if( $debug and defined( $result->{error_text} ) );
-        exit 1;
+        last;
     }
     elsif( defined( $result->{result} ) and $result->{result} == 1 )
     {
         print "PASSED: $test\n";
     }
+}
+
+if( scalar( @children ) > 0 )
+{
+    kill 'KILL', @children;
+}
+
+system( 'killall event_manager' );
+
+if( check_event_manager_running() )
+{
+    croak 'Could not reap children';
 }
 
 exit 0;

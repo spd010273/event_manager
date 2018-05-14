@@ -25,6 +25,7 @@
 #include "lib/strings.h"
 
 /* Constants */
+#define DEBUG
 #define VERSION 0.1
 #define MAX_CONN_RETRIES 3
 #define EXTENSION_NAME "event_manager"
@@ -1196,6 +1197,7 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * m
 bool execute_action_query( PGconn * conn, char * query, char * action, char * parameters, char * uid, char * recorded, char * transaction_label )
 {
     PGresult * parameter_result;
+    PGresult * action_result;
     int parameter_count;
     char * key;
     char * value;
@@ -1281,7 +1283,26 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
         "Output query is: '%s'",
         query_copy
     );
+
+    action_result = _execute_query(
+        query_copy,
+        NULL,
+        0,
+        true
+    );
+
     free( query_copy );
+
+    if( action_result == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to perform action query"
+        );
+        return false;
+    }
+
+    PQclear( action_result );
     return true;
 }
 
@@ -1495,7 +1516,7 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
 
             temp_string = ( char * ) malloc(
                 sizeof( char )
-              * ( strlen( string ) -  bind_length + strlen( replace ) )
+              * ( strlen( string ) -  bind_length + strlen( replace ) + 2 )
             );
 
             if( temp_string == NULL )
@@ -1508,7 +1529,9 @@ char * _regexp_replace( char * string, char * pattern, char * replace )
             }
 
             strncpy( temp_string, string, matches[j].rm_so );
+            strcat( temp_string, "'" );
             strcat( temp_string, replace );
+            strcat( temp_string, "'" );
             strcat( temp_string, ( char * ) ( string + matches[j].rm_eo ) );
 
             free( string );
