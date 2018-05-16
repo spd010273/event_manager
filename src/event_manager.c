@@ -559,7 +559,7 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
             PQfreemem( notify );
             (*dequeue_function)();
         }
-        
+
         if( got_sigterm )
         {
             _log(
@@ -1276,7 +1276,7 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
         action_query->_bind_count,
         true
     );
-    
+
     _free_query( action_query );
 
     if( action_result == NULL )
