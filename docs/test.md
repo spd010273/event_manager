@@ -39,3 +39,9 @@ Tests can be ran using the run_tests.pl script:
 ```
 
 It will return an itemized list of passed tests, stopping on the first failure
+
+# Development Testing
+
+Regression tests can be performed by using run_tests.pl, and debugging can be done using Valgrind.
+
+To perform testing using Valgrind, pass the -V flag to run_tests.pl - It will start the queue processors under valgrind

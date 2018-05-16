@@ -36,6 +36,7 @@ Results of actions are discarded.
 * PostgreSQL development packages
   * postgresql<version>-devel for CentOS / RHEL
   * libpq-dev and postgresql-server-dev-<version> for Debian / Ubuntu
+* Valgrind (optional)
 
 ## Installation
 1. Checkout the event_manager source from github

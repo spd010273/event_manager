@@ -20,13 +20,15 @@ use File::Glob;
 
 Readonly my $VERSION => '0.1';
 Readonly my $TESTDIR => './test/';
+Readonly my $VALGRIND_PREFIX => "valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full -v ";
+
 my $username;
 my $dbname;
 my $port;
 my $hostname;
 my $debug = 0;
 my @children;
-
+my $use_valgrind = 0;
 my $manager_running = 0;
 my $manager_should_be_running = 0;
 
@@ -55,6 +57,7 @@ sub usage(;$)
           [ -v  Prints version ]
           [ -l  list tests ]
           [ -D  Debug flag (show error detail) ]
+          [ -V  With Valgrind ]
 USAGE
     warn "$usage\n";
 
@@ -248,6 +251,13 @@ sub check_event_manager_running(;$)
             my $log = $flag;
             $log =~ s/^-//;
             my $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
+
+            if( $use_valgrind )
+            {
+                $command = "${VALGRIND_PREFIX}${command}";
+                print "Executing async processor with command:\n $command\n";
+            }
+
             my $pid = fork();
 
             if( not defined( $pid ) )
@@ -287,8 +297,8 @@ sub start_process($)
 }
 
 ## MAIN PROGRAM
-our( $opt_d, $opt_h, $opt_U, $opt_p, $opt_l, $opt_v, $opt_D );
-usage( 'invalid arguments' ) unless( getopts( 'd:U:p:h:lvD' ) );
+our( $opt_d, $opt_h, $opt_U, $opt_p, $opt_l, $opt_v, $opt_D, $opt_V );
+usage( 'invalid arguments' ) unless( getopts( 'd:U:p:h:lvDV' ) );
 
 $username = $opt_U;
 $port     = $opt_p;
@@ -312,6 +322,11 @@ if( $opt_l )
         print "$test\n";
     }
     exit 0;
+}
+
+if( $opt_V )
+{
+    $use_valgrind = 1;
 }
 
 unless( defined $username )
@@ -381,7 +396,14 @@ if( scalar( @children ) > 0 )
     kill 'KILL', @children;
 }
 
-system( 'killall event_manager' );
+if( $use_valgrind )
+{
+    system( 'killall event_manager' );
+}
+else
+{
+    system( 'killall valgrind' );
+}
 
 if( check_event_manager_running() )
 {

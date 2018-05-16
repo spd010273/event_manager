@@ -1,6 +1,5 @@
 /* TODO:
  *      - Double check that results are PQclear'd and mallocs are free'd
- *      - implement curling
  */
 
 // Compile with -DDEBUG to get debug messages
@@ -56,7 +55,6 @@
 #define SQL_STATE_CANCELED_BY_ADMINISTRATOR "57014"
 
 
-/* Program Globals / Structs */
 // Global Variables
 PGconn * conn                = NULL;
 char *   conninfo            = NULL;
@@ -67,9 +65,24 @@ bool     work_listener       = false;
 bool     enable_curl         = false;
 CURL *   curl_handle         = NULL;
 
+
+// Structures
+struct curl_response {
+    char * pointer;
+    size_t size;
+};
+
+struct query {
+    char *  query_string;
+    int     length;
+    char ** _bind_list;
+    int     _bind_count;
+};
+
 // Signal Traps
 volatile sig_atomic_t got_sigterm = false;
 volatile sig_atomic_t got_sighup  = false;
+
 
 /* Function Prototypes */
 void _parse_args( int, char ** );
@@ -91,10 +104,13 @@ static size_t _curl_write_callback( void *, size_t, size_t, void * );
 PGresult * _execute_query( char *, char **, int, bool );
 char * get_column_value( int, PGresult *, char * );
 bool is_column_null( int, PGresult *, char * );
-char * _regexp_replace( char *, char *, char * );
 bool _rollback_transaction( void );
 bool _commit_transaction( void );
 bool _begin_transaction( void );
+struct query * _new_query( char * );
+struct query * _add_parameter_to_query( struct query *, char *, char * );
+void _free_query( struct query * );
+void _debug_struct( struct query * );
 
 // Integration functions
 void _cyanaudit_integration( PGconn *, char * );
@@ -106,12 +122,6 @@ void __sighup( int );
 // Program Entry
 int main( int, char ** );
 
-
-/* Structures */
-struct curl_response {
-    char * pointer;
-    size_t size;
-};
 
 /* Functions */
 void _parse_args( int argc, char ** argv )
@@ -269,6 +279,7 @@ void _log( char * log_level, char * message, ... )
 #endif
 
     va_end( args );
+    fflush( output_handle );
 
     if( strcmp( log_level, LOG_LEVEL_FATAL ) == 0 )
     {
@@ -420,7 +431,11 @@ PGresult * _execute_query( char * query, char ** params, int param_count, bool t
 
             last_sql_state = PQresultErrorField( result, PG_DIAG_SQLSTATE );
 
-            PQclear( result );
+            if( result != NULL )
+            {
+                PQclear( result );
+            }
+
             retry_counter++;
         }
         else
@@ -554,6 +569,8 @@ void event_queue_handler( void )
     PGresult * delete_result;
     PGresult * insert_result;
 
+    struct query * work_item_query_obj = NULL;
+
     // Values that need to be copied to work_queue
     char * uid;
     char * recorded;
@@ -569,7 +586,7 @@ void event_queue_handler( void )
     char * event_table_work_item;
 
     char * parameters;
-    char * work_item_query_copy;
+//    char * work_item_query_copy;
     char * params[9];
     int    i;
 
@@ -627,55 +644,39 @@ void event_queue_handler( void )
     op                     = get_column_value( 0, result, "op" );
     pk_value               = get_column_value( 0, result, "pk_value" );
 
-    work_item_query_copy = ( char * ) malloc(
-        sizeof( char ) * strlen( work_item_query )
-    );
+    work_item_query_obj = _new_query( work_item_query );
 
-    if( work_item_query_copy == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to allocate memory to generate work_items"
-        );
-
-        _rollback_transaction();
-        PQclear( result );
-        return;
-    }
-
-    strcpy( work_item_query_copy, work_item_query );
-
-    work_item_query_copy = _regexp_replace(
-        work_item_query_copy,
-        "[?]event_table_work_item[?]",
+    work_item_query_obj = _add_parameter_to_query(
+        work_item_query_obj,
+        "event_table_work_item",
         event_table_work_item
     );
 
-    work_item_query_copy = _regexp_replace(
-        work_item_query_copy,
-        "[?]uid[?]",
+    work_item_query_obj = _add_parameter_to_query(
+        work_item_query_obj,
+        "uid",
         uid
     );
 
-    work_item_query_copy = _regexp_replace(
-        work_item_query_copy,
-        "[?]op[?]",
+    work_item_query_obj = _add_parameter_to_query(
+        work_item_query_obj,
+        "op",
         op
     );
 
-    work_item_query_copy = _regexp_replace(
-        work_item_query_copy,
-        "[?]pk_value[?]",
+    work_item_query_obj = _add_parameter_to_query(
+        work_item_query_obj,
+        "pk_value",
         pk_value
     );
 
-    work_item_query_copy = _regexp_replace(
-        work_item_query_copy,
-        "[?]recorded[?]",
+    work_item_query_obj = _add_parameter_to_query(
+        work_item_query_obj,
+        "recorded",
         recorded
     );
 
-    if( work_item_query_copy == NULL )
+    if( work_item_query_obj == NULL )
     {
         _log(
             LOG_LEVEL_ERROR,
@@ -686,14 +687,16 @@ void event_queue_handler( void )
         return;
     }
 
+    _log( LOG_LEVEL_DEBUG, "WORK ITEM QUERY: " );
+    _debug_struct( work_item_query_obj );
     work_item_result = _execute_query(
-        work_item_query_copy,
-        NULL,
-        0,
+        work_item_query_obj->query_string,
+        work_item_query_obj->_bind_list,
+        work_item_query_obj->_bind_count,
         true
     );
 
-    free( work_item_query_copy );
+    _free_query( work_item_query_obj );
 
     if( work_item_result == NULL )
     {
@@ -1198,12 +1201,11 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
 {
     PGresult * parameter_result;
     PGresult * action_result;
+    struct query * action_query;
     int parameter_count;
     char * key;
     char * value;
     int i;
-    char * query_copy;
-    char * bindpoint = NULL;
 
     parameter_result = get_parameters( conn, action, parameters );
 
@@ -1213,64 +1215,29 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
     }
 
     parameter_count = PQntuples( parameter_result );
-    query_copy = ( char * ) malloc( sizeof( char ) * strlen( query ) );
 
-    if( query_copy == NULL )
+    action_query = _new_query( query );
+
+    if( action_query == NULL )
     {
         _log(
             LOG_LEVEL_ERROR,
-            "Failed to allocate memory for query"
+            "Failed to initialize query struct"
         );
         PQclear( parameter_result );
         return false;
     }
-    strcpy( query_copy, query );
-    // These expressions difer from the SQL syntax because we're using POSIX ERE
-    query_copy = _regexp_replace( query_copy, "[?]uid[?]", uid );
-    query_copy = _regexp_replace( query_copy, "[?]recorded[?]", recorded );
-    query_copy = _regexp_replace( query_copy, "[?]transaction_label[?]", transaction_label );
 
-    if( query_copy == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Allocating memory for query failed"
-        );
-        PQclear( parameter_result );
-        return false;
-    }
+    action_query = _add_parameter_to_query( action_query, "uid", uid );
+    action_query = _add_parameter_to_query( action_query, "recorded", recorded );
+    action_query = _add_parameter_to_query( action_query, "transaction_label", transaction_label );
 
     for( i = 0; i < parameter_count; i++ )
     {
         key   = get_column_value( i, parameter_result, "key" );
         value = get_column_value( i, parameter_result, "value" );
-        bindpoint = ( char * ) malloc( sizeof( char ) * ( strlen( key ) + 7 ) );
 
-        if( bindpoint == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for regex operation"
-            );
-
-            free( query_copy );
-            PQclear( parameter_result );
-            return false;
-        }
-
-        strcpy( bindpoint, "[?]" );
-        strcat( bindpoint, key );
-        strcat( bindpoint, "[?]\0" );
-
-        query_copy = _regexp_replace( query_copy, bindpoint, value );
-
-        if( query_copy == NULL )
-        {
-            PQclear( parameter_result );
-            return false;
-        }
-
-        free( bindpoint );
+        action_query = _add_parameter_to_query( action_query, key, value );
     }
 
     PQclear( parameter_result );
@@ -1281,17 +1248,18 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
     _log(
         LOG_LEVEL_DEBUG,
         "Output query is: '%s'",
-        query_copy
+        action_query->query_string
     );
+
+    _log( LOG_LEVEL_DEBUG, "ACTION QUERY: " );
+    _debug_struct( action_query );
 
     action_result = _execute_query(
-        query_copy,
-        NULL,
-        0,
+        action_query->query_string,
+        action_query->_bind_list,
+        action_query->_bind_count,
         true
     );
-
-    free( query_copy );
 
     if( action_result == NULL )
     {
@@ -1299,10 +1267,12 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
             LOG_LEVEL_ERROR,
             "Failed to perform action query"
         );
+        _free_query( action_query );
         return false;
     }
 
     PQclear( action_result );
+    _free_query( action_query );
     return true;
 }
 
@@ -1460,92 +1430,6 @@ void _cyanaudit_integration( PGconn * conn, char * transaction_label )
     return;
 }
 
-char * _regexp_replace( char * string, char * pattern, char * replace )
-{
-    // Function assumes you've malloc'd *string, since it will need to be
-    // resized as replacements happen
-    regex_t    regex;
-    regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char *     temp_string;
-    int        bind_length = 0;
-    int        reg_result;
-    int        i;
-    int        j;
-
-    if( string == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "_regexp_replace received NULL string arg"
-        );
-
-        return NULL;
-    }
-
-    reg_result = regcomp( &regex, pattern, REG_EXTENDED );
-
-    if( reg_result )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Error compiling regular expression '%s'",
-            pattern
-        );
-
-        return string;
-    }
-
-
-    for( i = 0; i < MAX_REGEX_MATCHES; i++ )
-    {
-        reg_result = regexec( &regex, string, MAX_REGEX_GROUPS, matches, 0 );
-
-        if( reg_result != 0 )
-        {
-            return string;
-        }
-
-        for( j = 0; j < MAX_REGEX_GROUPS; j++ )
-        {
-            if( matches[j].rm_so == -1 )
-            {
-                break;
-            }
-
-            bind_length = matches[j].rm_eo - matches[j].rm_so;
-
-            temp_string = ( char * ) malloc(
-                sizeof( char )
-              * ( strlen( string ) -  bind_length + strlen( replace ) + 2 )
-            );
-
-            if( temp_string == NULL )
-            {
-                _log(
-                    LOG_LEVEL_ERROR,
-                    "Failed to allocate memory for regex operation"
-                );
-                return NULL;
-            }
-
-            strncpy( temp_string, string, matches[j].rm_so );
-            strcat( temp_string, "'" );
-            strcat( temp_string, replace );
-            strcat( temp_string, "'" );
-            strcat( temp_string, ( char * ) ( string + matches[j].rm_eo ) );
-
-            free( string );
-
-            string = temp_string;
-
-            temp_string = NULL;
-        }
-    }
-
-    regfree( &regex );
-    return string;
-}
-
 bool _rollback_transaction( void )
 {
     PGresult * result;
@@ -1618,6 +1502,7 @@ bool _begin_transaction( void )
 bool set_uid( char * uid )
 {
     PGresult * uid_function_result;
+    struct query * set_uid_query_obj = NULL;
     char *     params[1];
     char *     uid_function_name;
     char *     set_uid_query;
@@ -1660,7 +1545,7 @@ bool set_uid( char * uid )
 
     set_uid_query = ( char * ) malloc(
         sizeof( char )
-      * ( strlen( uid_function_name ) + 7 )
+      * ( strlen( uid_function_name ) + 8 )
     );
 
     if( set_uid_query == NULL )
@@ -1674,18 +1559,30 @@ bool set_uid( char * uid )
     strcpy( set_uid_query, "SELECT " );
     strcat( set_uid_query, uid_function_name );
 
-    PQclear( uid_function_result );
+    set_uid_query_obj = _new_query( set_uid_query );
+    free( set_uid_query );
 
-    set_uid_query = _regexp_replace( set_uid_query, "[?]uid[?]", uid );
+    set_uid_query_obj = _add_parameter_to_query( set_uid_query_obj, "uid", uid );
+
+    if( set_uid_query_obj == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to create query object for set uid function"
+        );
+
+        PQclear( uid_function_result );
+        return false;
+    }
 
     uid_function_result = _execute_query(
-        ( char * ) set_uid_query,
-        NULL,
-        0,
+        set_uid_query_obj->query_string,
+        set_uid_query_obj->_bind_list,
+        set_uid_query_obj->_bind_count,
         true
     );
 
-    free( set_uid_query );
+    _free_query( set_uid_query_obj );
 
     if( uid_function_result == NULL )
     {
@@ -1843,5 +1740,292 @@ void __sighup( int sig )
 {
     got_sighup = true;
     signal ( sig, __sighup );
+    return;
+}
+
+
+struct query * _new_query( char * query_string )
+{
+    struct query * query_object = NULL;
+
+    query_object = ( struct query * ) malloc( sizeof( struct query ) );
+
+    if( query_object == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for query parameterization structure"
+        );
+        return NULL;
+    }
+
+    query_object->length = strlen( query_string );
+
+    query_object->query_string = ( char * ) malloc(
+        sizeof( char )
+      * ( query_object->length + 1 )
+    );
+
+    if( query_object->query_string == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for query string"
+        );
+
+        free( query_object );
+        return NULL;
+    }
+
+    strcpy( (char * )( query_object->query_string ), query_string );
+    query_object->_bind_count = 0;
+    query_object->_bind_list = NULL;
+
+    return query_object;
+}
+
+struct query * _add_parameter_to_query( struct query * query_object, char * key, char * value )
+{
+    regex_t    regex;
+    regmatch_t matches[MAX_REGEX_GROUPS + 1];
+    char *     temp_query;
+    int        reg_result = 0;
+    int        i;
+
+    int    bind_length       = 0;
+    int    bind_counter      = 0;
+    char * bindpoint_search  = NULL;
+    char * bindpoint_replace = NULL;
+
+    if( query_object->query_string == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Cannot parameterize NULL query string"
+        );
+        _free_query( query_object );
+        return NULL;
+    }
+
+    bindpoint_search = ( char * ) malloc(
+        sizeof( char )
+      * ( strlen( key ) + 7 )
+    );
+
+    if( bindpoint_search == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for regular expression"
+        );
+        _free_query( query_object );
+        return NULL;
+    }
+
+    strcpy( bindpoint_search, "[?]" );
+    strcat( bindpoint_search, key );
+    strcat( bindpoint_search, "[?]" );
+
+    reg_result = regcomp( &regex, bindpoint_search, REG_EXTENDED );
+
+    if( reg_result != 0 )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to compile bindpoint search regular expression"
+        );
+        free( bindpoint_search );
+        _free_query( query_object );
+        return NULL;
+    }
+
+    bindpoint_replace = ( char * ) malloc(
+        sizeof( char )
+      * (int) ( floor( log10( abs( query_object->_bind_count + 1 ) ) ) + 3 )
+    );
+
+    if( bindpoint_replace == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for replacement string in regular expression"
+        );
+        free( bindpoint_search );
+        _free_query( query_object );
+        regfree( &regex );
+        return NULL;
+    }
+
+    sprintf( bindpoint_replace, "$%d", query_object->_bind_count + 1 );
+
+    for( i = 0; i < MAX_REGEX_MATCHES; i++ )
+    {
+        reg_result = regexec(
+            &regex,
+            query_object->query_string,
+            MAX_REGEX_GROUPS,
+            matches,
+            0
+        );
+
+        if( matches[0].rm_so == -1 || reg_result == REG_NOMATCH )
+        {
+            break;
+        }
+        else if( reg_result != 0 )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to execute regular expression search"
+            );
+            free( bindpoint_search );
+            _free_query( query_object );
+            free( bindpoint_replace );
+            regfree( &regex );
+            return NULL;
+        }
+
+        bind_counter++;
+
+        bind_length = matches[0].rm_eo - matches[0].rm_so;
+        temp_query = ( char * ) malloc(
+            sizeof( char )
+          * (
+                strlen( query_object->query_string )
+              - bind_length
+              + strlen( bindpoint_replace )
+              + 1
+            )
+        );
+
+        if( temp_query == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for string resize operation"
+            );
+            free( bindpoint_search );
+            free( query_object );
+            free( bindpoint_replace );
+            regfree( &regex );
+            return NULL;
+        }
+
+        strncpy( temp_query, query_object->query_string, matches[0].rm_so );
+        strcat( temp_query, bindpoint_replace );
+        strcat( temp_query, ( char * ) ( query_object->query_string + matches[0].rm_eo ) );
+
+        free( query_object->query_string );
+
+        query_object->query_string = ( char * ) malloc(
+            sizeof( char )
+          * ( strlen( temp_query ) + 1 )
+        );
+
+        if( query_object->query_string == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for resized string"
+            );
+            free( bindpoint_search );
+            _free_query( query_object );
+            free( bindpoint_replace );
+            regfree( &regex );
+        }
+
+        strcpy( query_object->query_string, temp_query );
+        query_object->length = strlen( temp_query );
+        free( temp_query );
+    }
+
+    free( bindpoint_search );
+    free( bindpoint_replace );
+    regfree( &regex );
+
+    if( bind_counter > 0 )
+    {
+        if( query_object->_bind_count == 0 )
+        {
+            query_object->_bind_list = ( char ** ) malloc(
+                sizeof( char * )
+            );
+        }
+        else
+        {
+            query_object->_bind_list = ( char ** ) realloc(
+                query_object->_bind_list,
+                sizeof( char * ) * ( query_object->_bind_count + 1 )
+            );
+        }
+
+        if( query_object->_bind_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for query parameter"
+            );
+
+            _free_query( query_object );
+            return NULL;
+        }
+
+        query_object->_bind_list[query_object->_bind_count] = ( char * ) malloc(
+            sizeof( char )
+          * ( strlen( value ) + 1 )
+        );
+        strcpy( query_object->_bind_list[query_object->_bind_count], value );
+        query_object->_bind_count = query_object->_bind_count + 1;
+    }
+
+    return query_object;
+}
+
+void _debug_struct( struct query * obj )
+{
+    int i;
+    _log( LOG_LEVEL_DEBUG, "Query object: " );
+    _log( LOG_LEVEL_DEBUG, "==============" );
+    _log( LOG_LEVEL_DEBUG, "query_string: '%s'", obj->query_string );
+    _log( LOG_LEVEL_DEBUG, "length: %d", obj->length );
+    _log( LOG_LEVEL_DEBUG, "_bind_count: %d", obj->_bind_count );
+    _log( LOG_LEVEL_DEBUG, "_bind_list: " );
+
+    for( i = 0; i < obj->_bind_count; i++ )
+    {
+        _log( LOG_LEVEL_DEBUG, "%d: '%s'", i, obj->_bind_list[i] );
+    }
+    return;
+}
+
+void _free_query( struct query * query_object )
+{
+    int i;
+    if( query_object == NULL )
+    {
+        return;
+    }
+
+    if( query_object->query_string != NULL )
+    {
+        free( query_object->query_string );
+    }
+
+    if( query_object->_bind_list != NULL )
+    {
+        if( query_object->_bind_count > 0 )
+        {
+            for( i = 0; i < query_object->_bind_count; i++ )
+            {
+                if( query_object->_bind_list[i] != NULL )
+                {
+                    free( query_object->_bind_list[i] );
+                }
+            }
+        }
+
+        free( query_object->_bind_list );
+    }
+
     return;
 }
