@@ -20,7 +20,7 @@ use File::Glob;
 
 Readonly my $VERSION => '0.1';
 Readonly my $TESTDIR => './test/';
-Readonly my $VALGRIND_PREFIX => "valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full -v ";
+Readonly my $VALGRIND_PREFIX => "valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all ";
 
 my $username;
 my $dbname;
@@ -278,6 +278,7 @@ sub check_event_manager_running(;$)
 
         if( &check_event_manager_running() )
         {
+            sleep( 5 );
             return 1;
         }
     }
@@ -393,16 +394,20 @@ foreach my $test( @$tests )
 
 if( scalar( @children ) > 0 )
 {
+    kill 'TERM', @children;
+    sleep( 1 );
     kill 'KILL', @children;
 }
 
-if( $use_valgrind )
+my $result = `ps aux | grep "\./[e]vent_manager" | awk '{ print \$2 }'`;
+
+foreach my $pid( split( "\n", $result ) )
 {
-    system( 'killall event_manager' );
-}
-else
-{
-    system( 'killall valgrind' );
+    chomp( $pid );
+    next unless( $pid =~ /^\d+$/ );
+    kill 'TERM', $pid;
+    sleep( 1 );
+    kill 'KILL', $pid;
 }
 
 if( check_event_manager_running() )

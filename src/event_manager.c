@@ -498,8 +498,20 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
     while( 1 )
     {
+        sigset_t signal_set;
         int sock;
         fd_set input_mask;
+
+        if( got_sigterm )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Exiting after receiving SIGTERM"
+            );
+            break;
+        }
+
+        sigaddset( &signal_set, SIGTERM );
         sock = PQsocket( conn );
 
         if( sock < 0 )
@@ -510,8 +522,10 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
         FD_ZERO( &input_mask );
         FD_SET( sock, &input_mask );
 
+        sigprocmask( SIG_BLOCK, &signal_set, NULL );
         if( select( sock + 1, &input_mask, NULL, NULL, NULL ) < 0 )
         {
+            sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
             _log(
                 LOG_LEVEL_FATAL,
                 "select() failed: %s",
@@ -520,6 +534,8 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
             return;
         }
+
+        sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 
         _log(
             LOG_LEVEL_DEBUG,
@@ -543,7 +559,7 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
             PQfreemem( notify );
             (*dequeue_function)();
         }
-
+        
         if( got_sigterm )
         {
             _log(
@@ -1725,10 +1741,7 @@ void __sigterm( int sig )
 
     if( got_sigterm == true )
     {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Bruh if you don't chill I swear..."
-        );
+        exit( 1 );
     }
 
     got_sigterm = true;
