@@ -602,7 +602,6 @@ void event_queue_handler( void )
     char * event_table_work_item;
 
     char * parameters;
-//    char * work_item_query_copy;
     char * params[9];
     int    i;
 
@@ -899,6 +898,7 @@ void work_queue_handler( void )
             return;
         }
 
+        PQclear( delete_result );
     }
 
     PQclear( result );
@@ -1079,7 +1079,7 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * m
 
     remote_call = ( char * ) malloc(
         sizeof( char )
-      * ( strlen( uri ) + strlen( param_list ) )
+      * ( strlen( uri ) + strlen( param_list ) + 1 )
     );
 
     if( remote_call == NULL )
@@ -1276,6 +1276,8 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
         action_query->_bind_count,
         true
     );
+    
+    _free_query( action_query );
 
     if( action_result == NULL )
     {
@@ -1283,12 +1285,12 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
             LOG_LEVEL_ERROR,
             "Failed to perform action query"
         );
-        _free_query( action_query );
+
         return false;
     }
 
     PQclear( action_result );
-    _free_query( action_query );
+
     return true;
 }
 
@@ -1741,6 +1743,7 @@ void __sigterm( int sig )
 
     if( got_sigterm == true )
     {
+        free( conninfo );
         exit( 1 );
     }
 
@@ -1945,6 +1948,8 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
             _free_query( query_object );
             free( bindpoint_replace );
             regfree( &regex );
+            free( temp_query );
+            return NULL;
         }
 
         strcpy( query_object->query_string, temp_query );
