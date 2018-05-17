@@ -18,6 +18,10 @@ CREATE TABLE @extschema@.tb_event_table
     column_name VARCHAR[]
 );
 
+COMMENT ON TABLE @extschema@.tb_event_table IS 'Stores tables being watched for events';
+COMMENT ON COLUMN @extschema@.tb_event_table.schema_name IS 'Stores the schema to which the table belongs';
+COMMENT ON COLUMN @extschema@.tb_event_table.table_name IS 'Stores the table name of the relation';
+
 CREATE SEQUENCE @extschema@.sq_pk_action;
 CREATE TABLE @extschema@.tb_action
 (
@@ -43,13 +47,25 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     work_item_query         TEXT NOT NULL,
     when_function           VARCHAR DEFAULT current_setting( '@extschema@.default_when_function', TRUE )::VARCHAR,
     op                      CHAR(1),
-    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE )
+    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
+    CHECK( ( op IN( 'D', 'I', 'U' ) ) )
 );
 CREATE UNIQUE INDEX ix_source_action_target_unique ON @extschema@.tb_event_table_work_item(
     COALESCE( target_event_table, -1 ),
     source_event_table,
     action
 );
+
+COMMENT ON TABLE @extschema@.tb_event_table_work_item IS 'A list of actions that should occur for any given event table';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'Indicates the table that can trigger this work item';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.target_event_table IS 'Indicates the target of this work items action. Not necessary but useful for any user interface built around this';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.action IS 'Foreign key to tb_action - indicates what this work item generates parameters for';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.description IS 'User-facing description for that this work item is / does';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.transaction_label IS 'Label for what the action is performing. Used in Cyanaudit integration';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.work_item_query IS 'Generates a list of parameters for the action. This query has named bind point for the columns in this table. Query should generate JSONB aliased as parameters';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.when_function IS 'Filters events entering tb_event_queue. Example prototype is fn_dummy_when_function. Function should return BOOLEAN';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.op IS 'Indicates what DML operation this work item applies: U - Update, I - Insert, D - Delete.';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.execute_asynchronously IS 'Determines what mode of execution this work item will be ran under.';
 
 CREATE TABLE @extschema@.tb_event_queue
 (
@@ -61,8 +77,11 @@ CREATE TABLE @extschema@.tb_event_queue
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
     transaction_label       VARCHAR,
     work_item_query         TEXT,
-    action                  INTEGER
+    action                  INTEGER,
+    CHECK( (  op IN( 'D', 'U', 'I' ) ) )
 );
+
+COMMENT ON TABLE @extschema@.tb_event_queue IS 'Queue for events arriving from tb_event_tables. Contents are copied from their corresponding event_table_work_item entry.';
 
 CREATE TABLE @extschema@.tb_work_queue
 (
@@ -73,6 +92,8 @@ CREATE TABLE @extschema@.tb_work_queue
     transaction_label       VARCHAR,
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE )
 );
+
+COMMENT ON TABLE @extschema@.tb_work_queue IS 'Queue for work_item_query results. Remaining contents copied from the corresponding event_queue entry';
 
 CREATE TABLE @extschema@.tb_setting
 (
@@ -119,6 +140,8 @@ CREATE TABLE @extschema@.tb_event_table_work_item_instance
     target_pk               INTEGER NOT NULL
 );
 
+COMMENT ON TABLE @extschema@.tb_event_table_work_item_instance IS 'Can be used to aid work item queries or action queries when the scope of an action query is non-deterministic or too broad.';
+
 CREATE OR REPLACE FUNCTION @extschema@.fn_dummy_when_function
 (
     in_event_table_work_item    INTEGER,
@@ -130,6 +153,31 @@ RETURNS BOOLEAN AS
     SELECT TRUE;
  $_$
     LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION @extschema@.fn_catalog_check()
+RETURNS TRIGGER AS
+ $_$
+BEGIN
+    PERFORM *
+       FROM pg_class c
+ INNER JOIN pg_namespace n
+         ON n.oid = c.relnamespace
+      WHERE c.relname::VARCHAR = NEW.table_name
+        AND n.nspname::VARCHAR = NEW.schema_name
+        AND c.relkind::CHAR IN( 'm', 'v', 'r' );
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Event table does not exist or is not a relation.';
+    END IF;
+
+    RETURN NEW;
+END
+ $_$
+    LANGUAGE plpgsql VOLATILE PARALLEL UNSAFE;
+
+CREATE TRIGGER tr_event_table_catalog_check
+    AFTER INSERT OR UPDATE ON @extschema@.tb_event_table
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_catalog_check();
 
 CREATE OR REPLACE FUNCTION @extschema@.fn_enqueue_event()
 RETURNS TRIGGER AS
@@ -191,6 +239,10 @@ BEGIN
                                 ON et.event_table = etwi.source_event_table
                                AND et.table_name = TG_TABLE_NAME::VARCHAR
                                AND et.schema_name = TG_TABLE_SCHEMA::VARCHAR
+                               AND (
+                                        etwi.op = substr( TG_OP, 1, 1 )
+                                     OR etwi.op IS NULL
+                                   )
                          ) LOOP
         EXECUTE 'SELECT ' || my_when_function
              || '( $1::INTEGER, $2::INTEGER, $3::CHAR(1) )::BOOLEAN'
