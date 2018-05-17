@@ -1,0 +1,14 @@
+[Unit]
+Description=Event Manager Event Queue Processor
+Documentation=https://bitbucket.org/neadwerx/event_manager/src/master/
+After=network.target syslog.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/event_manager-startup.sh
+RemainAfterExit=true
+ExecStop=/usr/bin/event_manager-shutdown.sh
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
