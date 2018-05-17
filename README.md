@@ -13,15 +13,20 @@ Events can be processed either synchronously or asynchronously in both stages of
 
 # Usage
 
+For more information on using this extension, see docs/usage.md
+
 ## Creating Events
+
 Events can be 'subscribed to' by inserting the table into tb_event_table and creating at least one tb_event_table_work_item for that table.
 
-When DML occurs on that table, the work items are executed.
+When DML occurs on that table, the work item entries for that event table are executed. These potential queue elements are filtered by a function that can determine whether these events apply to the work item.
 
-Work item queries are expected to generate one or more rows of JSONB aliased as parameters which are fed into the action.
+Work item queries are expected to generate one or more rows of JSONB aliased as 'parameters' which are fed into the action.
+
 
 ## Creating Actions
-Actions are either local database modification or remote API calls that happen after an event is processed. Parameters for these calls are gathered from the action's static parameter list, as well as the results from the work item query.
+
+Actions are either local database modification or remote API calls that happen after an event is processed. Parameters for these calls are gathered from the action's static parameter list, as well as the results from the work item query, or static parameters stored with the action.
 
 Results of actions are discarded.
 
@@ -46,8 +51,6 @@ Results of actions are discarded.
 5. Log into the database server
 6. Run 'CREATE EXTENSION event_manager;'
 7. Start the event_manager program with connection parameters to your target DB server/instance.
-
-Note: You may need to symling the libpq-fe.h file to /usr/includes. This file is located in /usr/pgsql-<version>/includes/ or wherever your repo version of PostgreSQL installed its includes
 
 ## Changelog
 

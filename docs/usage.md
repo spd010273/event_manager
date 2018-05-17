@@ -41,8 +41,8 @@ INNER JOIN event_manager.tb_event_table et
 
 Some guidelines to work queries:
 
-* Parameters are 'bound' in using a regular expression in the form of \?key\? or [?]key[?]
-* Typecasting is strongly recommended, as translating from JSONB types to SQL types is best-effort (in PostgreSQL) and non existant (in this script)
+* Parameters are bound in using a regular expression in the form of \?key\? or [?]key[?]
+* Typecasting is strongly recommended, as translating from JSONB types to SQL types is best-effort (in PostgreSQL).
 * It goes without saying that due to this, there is a real SQL injection risk if you allow users to insert directly into these tables
 * Work item queries can have a bindpoint make multiple appearances in the same query
 * Work item queries that generate multiple rows will result in multiple actions (1:1 to query output)
@@ -81,3 +81,14 @@ RETURNS BOOLEAN AS
 ```
 
 When functions are executed prior to inserting into the event queue, within the same transaction that is causing the event.
+
+# Synchronous / Asynchronous mode
+
+Event and Action pairs can execute either synchronously or asynchronously. Synchronous execution means the parameters for the action are enumerated and the action is performed within the same transaction that triggered the event. Asynchronous mode issues a NOTIFY to the queue processors when a new queue item is present, and the processing happens outside of the originating transaction.
+
+Some notes about the various modes:
+
+* Remote API calls cannot be made in synchronous mode
+* event_table_work_item.execute_asynchronously overrides the global setting (the global setting defines the default for this value)
+* Asynchronous mode requires the event_manager process to be started:
+  * Start two copies of the process, one with the -W flag (for work queue processing) and another with the -E flag (for event queue processing)
