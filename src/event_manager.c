@@ -3,7 +3,7 @@
  * event_manager.c
  *     Main event_manager routine and functions
  *
- * Copyright (c) 2018, Nead Werx Inc.
+ * Copyright (c) 2018, Nead Werx, Inc.
  *
  * IDENTIFICATION
  *        event_manager.c
