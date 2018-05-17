@@ -174,7 +174,7 @@ sub get_tests() :Export(:DEFAULT)
 
     while( my $entry = readdir $dir )
     {
-        if( $entry =~ /^\./ )
+        if( $entry =~ /^\./ or not $entry =~ /\.sql$/ )
         {
             next;
         }
@@ -378,17 +378,18 @@ if( check_event_manager_running() and not $manager_should_be_running )
 
 foreach my $test( @$tests )
 {
+    print "RUNNING: $test... ";
     my $result = run_test( "$TESTDIR/$test" );
 
     if( not defined( $result->{result} ) or $result->{result} == 0 )
     {
-        print "FAILED: $test\n";
+        print "FAILED\n";
         print "    $result->{error_text}\n" if( $debug and defined( $result->{error_text} ) );
         last;
     }
     elsif( defined( $result->{result} ) and $result->{result} == 1 )
     {
-        print "PASSED: $test\n";
+        print "PASSED\n";
     }
 }
 

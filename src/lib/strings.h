@@ -1,20 +1,24 @@
+/*------------------------------------------------------------------------
+ *
+ * strings.h
+ *     Static string declarations (Queries n' such)
+ *
+ * Copyright (c) 2018, Nead Werx, Inc.
+ *
+ * IDENTIFICATION
+ *        strings.h
+ *
+ *------------------------------------------------------------------------
+ */
+
+#ifndef STRINGS_H
+#define STRINGS_H
 #define EXTENSION_NAME "event_manager"
 
 /* Static Strings */
 static const char * user_agent =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36";
-
-static const char * usage_string =
-    "Usage: event_manager\n"
-    "    -U DB User (default: postgres)\n"
-    "    -p DB Port (default: 5432)\n"
-    "    -h DB Host (default: localhost)\n"
-    "    -d DB name (default: DB User)\n"
-    "    -E | -W Start Event or Work Queue Processor, respectively\n"
-    "  [ -D debug mode\n"
-    "    -v VERSION\n"
-    "    -? HELP ] \n";
 
 /* Queries */
 static const char * extension_check_query =
@@ -128,3 +132,4 @@ static const char * cyanaudit_check =
 
 static const char * cyanaudit_label_tx =
     "    SELECT cyanaudit.fn_label_last_transaction( $1 ) ";
+#endif

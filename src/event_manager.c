@@ -1,5 +1,14 @@
-/* TODO:
- *      - Double check that results are PQclear'd and mallocs are free'd
+/*------------------------------------------------------------------------
+ *
+ * event_manager.c
+ *     Main event_manager routine and functions
+ *
+ * Copyright (c) 2018, Nead Werx Inc.
+ *
+ * IDENTIFICATION
+ *        event_manager.c
+ *
+ *------------------------------------------------------------------------
  */
 
 // Compile with -DDEBUG to get debug messages
@@ -7,13 +16,11 @@
 /* Includes */
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <unistd.h>
 #include <stdbool.h>
 #include <math.h>
 #include <libpq-fe.h>
 #include <string.h>
-#include <regex.h>
 #include <errno.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -22,23 +29,15 @@
 
 #include <curl/curl.h>
 #include "lib/strings.h"
+#include "lib/query_helper.h"
+#include "lib/util.h"
 
 /* Constants */
-#define DEBUG
-#define VERSION 0.1
 #define MAX_CONN_RETRIES 3
-#define EXTENSION_NAME "event_manager"
 
 // Channels
 #define EVENT_QUEUE_CHANNEL "new_event_queue_item"
 #define WORK_QUEUE_CHANNEL "new_work_queue_item"
-
-// Log Levels
-#define LOG_LEVEL_WARNING "WARNING"
-#define LOG_LEVEL_ERROR "ERROR"
-#define LOG_LEVEL_FATAL "FATAL"
-#define LOG_LEVEL_DEBUG "DEBUG"
-#define LOG_LEVEL_INFO "INFO"
 
 // GUCs
 #define DEFAULT_WHEN_GUC_NAME "default_when_function"
@@ -54,14 +53,16 @@
 #define SQL_STATE_TERMINATED_BY_ADMINISTRATOR "57P01"
 #define SQL_STATE_CANCELED_BY_ADMINISTRATOR "57014"
 
+#define LOG_LEVEL_WARNING "WARNING"
+#define LOG_LEVEL_ERROR "ERROR"
+#define LOG_LEVEL_FATAL "FATAL"
+#define LOG_LEVEL_DEBUG "DEBUG"
+#define LOG_LEVEL_INFO "INFO"
 
 // Global Variables
 PGconn * conn                = NULL;
-char *   conninfo            = NULL;
 char *   ext_schema          = NULL;
 bool     cyanaudit_installed = false;
-bool     event_listener      = false;
-bool     work_listener       = false;
 bool     enable_curl         = false;
 CURL *   curl_handle         = NULL;
 
@@ -72,22 +73,7 @@ struct curl_response {
     size_t size;
 };
 
-struct query {
-    char *  query_string;
-    int     length;
-    char ** _bind_list;
-    int     _bind_count;
-};
-
-// Signal Traps
-volatile sig_atomic_t got_sigterm = false;
-volatile sig_atomic_t got_sighup  = false;
-
-
 /* Function Prototypes */
-void _parse_args( int, char ** );
-void _usage( char * ) __attribute__ ((noreturn));
-void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
 
 // Main functions
 void _queue_loop( const char *, void (*)(void) );
@@ -107,195 +93,15 @@ bool is_column_null( int, PGresult *, char * );
 bool _rollback_transaction( void );
 bool _commit_transaction( void );
 bool _begin_transaction( void );
-struct query * _new_query( char * );
-struct query * _add_parameter_to_query( struct query *, char *, char * );
-void _free_query( struct query * );
-void _debug_struct( struct query * );
 
 // Integration functions
 void _cyanaudit_integration( PGconn *, char * );
-
-// Signal handler functions
-void __sigterm( int );
-void __sighup( int );
 
 // Program Entry
 int main( int, char ** );
 
 
 /* Functions */
-void _parse_args( int argc, char ** argv )
-{
-    int    c;
-    char * username = NULL;
-    char * dbname   = NULL;
-    char * port     = NULL;
-    char * hostname = NULL;
-
-    opterr = 0;
-
-    while( ( c = getopt( argc, argv, "U:p:d:h:v?EW" ) ) != -1 )
-    {
-        switch( c )
-        {
-            case 'U':
-                username = optarg;
-                break;
-            case 'p':
-                port = optarg;
-                break;
-            case 'd':
-                dbname = optarg;
-                break;
-            case 'h':
-                hostname = optarg;
-                break;
-            case '?':
-                _usage( NULL );
-            case 'v':
-                printf( "Event Manager, version %f\n", (float) VERSION );
-                exit( 0 );
-            case 'E':
-                event_listener = true;
-                break;
-            case 'W':
-                work_listener = true;
-                break;
-            default:
-                _usage( "Invalid argument." );
-        }
-    }
-
-    if( event_listener == true && work_listener == true )
-    {
-        _usage( "Event and Work queue processing modes are mutually exclusive" );
-    }
-
-    if( event_listener == false && work_listener == false )
-    {
-        _usage( "Need to instruct program to listen to events (-E) or work (-W)" );
-    }
-
-    if( port == NULL )
-        port = "5432";
-
-    if( username == NULL )
-        username = "postgres";
-
-    if( hostname == NULL )
-        hostname = "localhost";
-
-    if( dbname == NULL )
-        dbname = username;
-
-    conninfo = ( char * ) malloc(
-        sizeof( char ) *
-        (
-            strlen( username ) +
-            strlen( port ) +
-            strlen( dbname ) +
-            strlen( hostname ) +
-            26
-        )
-    );
-
-    strcpy( conninfo, "user=" );
-    strcat( conninfo, username );
-    strcat( conninfo, " host=" );
-    strcat( conninfo, hostname );
-    strcat( conninfo, " port=" );
-    strcat( conninfo, port );
-    strcat( conninfo, " dbname=" );
-    strcat( conninfo, dbname );
-
-    _log(
-        LOG_LEVEL_DEBUG,
-        "Parsed args: %s",
-        conninfo
-    );
-
-    return;
-}
-
-void _usage( char * message )
-{
-    if( message != NULL )
-    {
-        printf( "%s\n", message );
-    }
-
-    printf( "%s", usage_string );
-
-    exit( 1 );
-}
-
-void _log( char * log_level, char * message, ... )
-{
-    va_list args;
-    FILE *  output_handle;
-
-    if( message == NULL )
-    {
-        return;
-    }
-
-    va_start( args, message );
-
-    if(
-        strcmp( log_level, LOG_LEVEL_WARNING ) == 0 ||
-        strcmp( log_level, LOG_LEVEL_ERROR ) == 0 ||
-        strcmp( log_level, LOG_LEVEL_FATAL ) == 0
-      )
-    {
-        output_handle = stderr;
-    }
-    else
-    {
-        output_handle = stdout;
-    }
-
-#ifndef DEBUG
-    if( strcmp( log_level, LOG_LEVEL_DEBUG ) != 0 )
-    {
-#endif
-        fprintf(
-            output_handle,
-            "%s: ",
-            log_level
-        );
-
-        vfprintf(
-            output_handle,
-            message,
-            args
-        );
-
-        fprintf(
-            output_handle,
-            "\n"
-        );
-#ifndef DEBUG
-    }
-#endif
-
-    va_end( args );
-    fflush( output_handle );
-
-    if( strcmp( log_level, LOG_LEVEL_FATAL ) == 0 )
-    {
-        free( conninfo );
-
-        if( conn != NULL )
-        {
-            PQfinish( conn );
-        }
-
-        exit( 1 );
-    }
-
-    return;
-}
-
 PGresult * _execute_query( char * query, char ** params, int param_count, bool transaction_mode )
 {
     PGresult * result;
@@ -1731,319 +1537,4 @@ int main( int argc, char ** argv )
     }
 
     return 0;
-}
-
-// Signal Handlers
-void __sigterm( int sig )
-{
-    _log(
-        LOG_LEVEL_ERROR,
-        "Got SIGTERM. Completing current transaction..."
-    );
-
-    if( got_sigterm == true )
-    {
-        free( conninfo );
-        exit( 1 );
-    }
-
-    got_sigterm = true;
-    signal ( sig, __sigterm );
-    return;
-}
-
-void __sighup( int sig )
-{
-    got_sighup = true;
-    signal ( sig, __sighup );
-    return;
-}
-
-
-struct query * _new_query( char * query_string )
-{
-    struct query * query_object = NULL;
-
-    query_object = ( struct query * ) malloc( sizeof( struct query ) );
-
-    if( query_object == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to allocate memory for query parameterization structure"
-        );
-        return NULL;
-    }
-
-    query_object->length = strlen( query_string );
-
-    query_object->query_string = ( char * ) malloc(
-        sizeof( char )
-      * ( query_object->length + 1 )
-    );
-
-    if( query_object->query_string == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to allocate memory for query string"
-        );
-
-        free( query_object );
-        return NULL;
-    }
-
-    strcpy( (char * )( query_object->query_string ), query_string );
-    query_object->_bind_count = 0;
-    query_object->_bind_list = NULL;
-
-    return query_object;
-}
-
-struct query * _add_parameter_to_query( struct query * query_object, char * key, char * value )
-{
-    regex_t    regex;
-    regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char *     temp_query;
-    int        reg_result = 0;
-    int        i;
-
-    int    bind_length       = 0;
-    int    bind_counter      = 0;
-    char * bindpoint_search  = NULL;
-    char * bindpoint_replace = NULL;
-
-    if( query_object->query_string == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Cannot parameterize NULL query string"
-        );
-        _free_query( query_object );
-        return NULL;
-    }
-
-    bindpoint_search = ( char * ) malloc(
-        sizeof( char )
-      * ( strlen( key ) + 7 )
-    );
-
-    if( bindpoint_search == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to allocate memory for regular expression"
-        );
-        _free_query( query_object );
-        return NULL;
-    }
-
-    strcpy( bindpoint_search, "[?]" );
-    strcat( bindpoint_search, key );
-    strcat( bindpoint_search, "[?]" );
-
-    reg_result = regcomp( &regex, bindpoint_search, REG_EXTENDED );
-
-    if( reg_result != 0 )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to compile bindpoint search regular expression"
-        );
-        free( bindpoint_search );
-        _free_query( query_object );
-        return NULL;
-    }
-
-    bindpoint_replace = ( char * ) malloc(
-        sizeof( char )
-      * (int) ( floor( log10( abs( query_object->_bind_count + 1 ) ) ) + 3 )
-    );
-
-    if( bindpoint_replace == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to allocate memory for replacement string in regular expression"
-        );
-        free( bindpoint_search );
-        _free_query( query_object );
-        regfree( &regex );
-        return NULL;
-    }
-
-    sprintf( bindpoint_replace, "$%d", query_object->_bind_count + 1 );
-
-    for( i = 0; i < MAX_REGEX_MATCHES; i++ )
-    {
-        reg_result = regexec(
-            &regex,
-            query_object->query_string,
-            MAX_REGEX_GROUPS,
-            matches,
-            0
-        );
-
-        if( matches[0].rm_so == -1 || reg_result == REG_NOMATCH )
-        {
-            break;
-        }
-        else if( reg_result != 0 )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to execute regular expression search"
-            );
-            free( bindpoint_search );
-            _free_query( query_object );
-            free( bindpoint_replace );
-            regfree( &regex );
-            return NULL;
-        }
-
-        bind_counter++;
-
-        bind_length = matches[0].rm_eo - matches[0].rm_so;
-        temp_query = ( char * ) malloc(
-            sizeof( char )
-          * (
-                strlen( query_object->query_string )
-              - bind_length
-              + strlen( bindpoint_replace )
-              + 1
-            )
-        );
-
-        if( temp_query == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for string resize operation"
-            );
-            free( bindpoint_search );
-            free( query_object );
-            free( bindpoint_replace );
-            regfree( &regex );
-            return NULL;
-        }
-
-        strncpy( temp_query, query_object->query_string, matches[0].rm_so );
-        strcat( temp_query, bindpoint_replace );
-        strcat( temp_query, ( char * ) ( query_object->query_string + matches[0].rm_eo ) );
-
-        free( query_object->query_string );
-
-        query_object->query_string = ( char * ) malloc(
-            sizeof( char )
-          * ( strlen( temp_query ) + 1 )
-        );
-
-        if( query_object->query_string == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for resized string"
-            );
-            free( bindpoint_search );
-            _free_query( query_object );
-            free( bindpoint_replace );
-            regfree( &regex );
-            free( temp_query );
-            return NULL;
-        }
-
-        strcpy( query_object->query_string, temp_query );
-        query_object->length = strlen( temp_query );
-        free( temp_query );
-    }
-
-    free( bindpoint_search );
-    free( bindpoint_replace );
-    regfree( &regex );
-
-    if( bind_counter > 0 )
-    {
-        if( query_object->_bind_count == 0 )
-        {
-            query_object->_bind_list = ( char ** ) malloc(
-                sizeof( char * )
-            );
-        }
-        else
-        {
-            query_object->_bind_list = ( char ** ) realloc(
-                query_object->_bind_list,
-                sizeof( char * ) * ( query_object->_bind_count + 1 )
-            );
-        }
-
-        if( query_object->_bind_list == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for query parameter"
-            );
-
-            _free_query( query_object );
-            return NULL;
-        }
-
-        query_object->_bind_list[query_object->_bind_count] = ( char * ) malloc(
-            sizeof( char )
-          * ( strlen( value ) + 1 )
-        );
-        strcpy( query_object->_bind_list[query_object->_bind_count], value );
-        query_object->_bind_count = query_object->_bind_count + 1;
-    }
-
-    return query_object;
-}
-
-void _debug_struct( struct query * obj )
-{
-    int i;
-    _log( LOG_LEVEL_DEBUG, "Query object: " );
-    _log( LOG_LEVEL_DEBUG, "==============" );
-    _log( LOG_LEVEL_DEBUG, "query_string: '%s'", obj->query_string );
-    _log( LOG_LEVEL_DEBUG, "length: %d", obj->length );
-    _log( LOG_LEVEL_DEBUG, "_bind_count: %d", obj->_bind_count );
-    _log( LOG_LEVEL_DEBUG, "_bind_list: " );
-
-    for( i = 0; i < obj->_bind_count; i++ )
-    {
-        _log( LOG_LEVEL_DEBUG, "%d: '%s'", i, obj->_bind_list[i] );
-    }
-    return;
-}
-
-void _free_query( struct query * query_object )
-{
-    int i;
-    if( query_object == NULL )
-    {
-        return;
-    }
-
-    if( query_object->query_string != NULL )
-    {
-        free( query_object->query_string );
-    }
-
-    if( query_object->_bind_list != NULL )
-    {
-        if( query_object->_bind_count > 0 )
-        {
-            for( i = 0; i < query_object->_bind_count; i++ )
-            {
-                if( query_object->_bind_list[i] != NULL )
-                {
-                    free( query_object->_bind_list[i] );
-                }
-            }
-        }
-
-        free( query_object->_bind_list );
-    }
-
-    return;
 }
