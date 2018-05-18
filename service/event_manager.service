@@ -1,7 +1,7 @@
 [Unit]
 Description=Event Manager Event Queue Processor
 Documentation=https://bitbucket.org/neadwerx/event_manager/src/master/
-After=network.target syslog.target
+After=network.target
 
 [Service]
 Type=oneshot

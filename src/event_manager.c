@@ -33,6 +33,7 @@
 #include "lib/util.h"
 
 /* Constants */
+#define DEBUG
 #define MAX_CONN_RETRIES 3
 
 // Channels
@@ -304,7 +305,9 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
     while( 1 )
     {
+#ifdef BLOCKING_SELECT
         sigset_t signal_set;
+#endif
         int sock;
         fd_set input_mask;
 
@@ -317,7 +320,9 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
             break;
         }
 
+#ifdef BLOCKING_SELECT
         sigaddset( &signal_set, SIGTERM );
+#endif
         sock = PQsocket( conn );
 
         if( sock < 0 )
@@ -327,11 +332,14 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
         FD_ZERO( &input_mask );
         FD_SET( sock, &input_mask );
-
+#ifdef BLOCKING_SELECT
         sigprocmask( SIG_BLOCK, &signal_set, NULL );
+#endif
         if( select( sock + 1, &input_mask, NULL, NULL, NULL ) < 0 )
         {
+#ifdef BLOCKING_SELECT
             sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
+#endif
             _log(
                 LOG_LEVEL_FATAL,
                 "select() failed: %s",
@@ -340,8 +348,9 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
             return;
         }
-
+#ifdef BLOCKING_SELECT
         sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
+#endif
 
         _log(
             LOG_LEVEL_DEBUG,

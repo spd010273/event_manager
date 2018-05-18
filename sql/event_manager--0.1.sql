@@ -154,6 +154,37 @@ RETURNS BOOLEAN AS
  $_$
     LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
+CREATE OR REPLACE FUNCTION @extschema@.fn_test_work_item_query()
+RETURNS TRIGGER AS
+ $_$
+DECLARE
+    my_work_item_query  VARCHAR;
+BEGIN
+    my_work_item_query := regexp_replace( NEW.work_item_query, '\?\w+\?', 'NULL', 'g' );
+    EXECUTE 'CREATE TEMP TABLE tt_work_item_test AS( ' || my_work_item_query || ' LIMIT 0)';
+
+    PERFORM a.attname
+       FROM pg_attribute a
+ INNER JOIN pg_class c
+         ON c.oid = a.attrelid
+        AND c.relname::VARCHAR = 'tt_work_item_test'
+      WHERE a.attnum > 0
+        AND a.attname = 'parameters';
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'work_item_query does not return a ''parameters'' JSONB column';
+    END IF;
+
+    DROP TABLE IF EXISTS @extschema@.tt_work_item_test;
+    RETURN NEW;
+END
+ $_$
+    LANGUAGE plpgsql;
+
+CREATE TRIGGER tr_work_item_query_test
+    AFTER INSERT OR UPDATE ON @extschema@.tb_event_table_work_item
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_test_work_item_query();
+
 CREATE OR REPLACE FUNCTION @extschema@.fn_catalog_check()
 RETURNS TRIGGER AS
  $_$

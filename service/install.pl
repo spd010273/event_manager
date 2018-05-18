@@ -11,6 +11,7 @@ use DBI;
 use English qw( -no_match_vars );
 use Params::Validate qw( :all );
 use Getopt::Std;
+use File::Copy;
 
 Readonly my $start_sh => <<BASH;
 #!/bin/bash
@@ -24,7 +25,7 @@ Readonly my $stop_sh => <<BASH;
 #!/bin/bash
 #    This script will stop the event_manager daemons
 
-killall -w event_manager
+killall event_manager
 BASH
 
 Readonly my $start_file_name => 'event_manager-startup.sh';
@@ -106,58 +107,59 @@ unless( -e "$dir/../event_manager" )
     croak "Could not locate event_manager daemon - is it built?";
 }
 
-chdir( '../' );
+if( $dir =~ /\/service/ )
+{
+    chdir( '../' );
+}
+
 my $install_dir = getcwd();
 chdir( $dir );
 
 our( $opt_d, $opt_U, $opt_p, $opt_h );
-if( getopt( 'd:U:p:h' ) )
+unless( getopts( 'd:U:p:h:' ) )
 {
-    if( defined $opt_d and length( $opt_d ) > 0 )
-    {
-        $dbname = $opt_d;
-    }
-    else
-    {
-        get_dbname();
-    }
-
-    if( defined $opt_U and length( $opt_U ) > 0 )
-    {
-        $username = $opt_U;
-    }
-    else
-    {
-        get_username();
-    }
-
-    if( defined $opt_h and length( $opt_h ) > 0 )
-    {
-        $hostname = $opt_h;
-    }
-    else
-    {
-        get_hostname();
-    }
-
-    if( defined $opt_p and $opt_p =~ /^\d+$/ )
-    {
-        $port = $opt_p;
-    }
-    else
-    {
-        get_port();
-    }
-}
-else
-{
-    GET_ARGS:
     get_dbname();
     get_username();
     get_hostname();
     get_port();
 }
 
+GET_ARGS:
+if( defined $opt_d and length( $opt_d ) > 0 )
+{
+    $dbname = $opt_d;
+}
+else
+{
+    get_dbname();
+}
+
+if( defined $opt_U and length( $opt_U ) > 0 )
+{
+    $username = $opt_U;
+}
+else
+{
+    get_username();
+}
+
+if( defined $opt_h and length( $opt_h ) > 0 )
+{
+    $hostname = $opt_h;
+}
+else
+{
+    get_hostname();
+}
+
+if( defined $opt_p and $opt_p =~ /^\d+$/ )
+{
+    $port = $opt_p;
+}
+else
+{
+    get_port();
+}
 
 unless( test_connection() )
 {
@@ -193,12 +195,26 @@ close STOPFILE;
 chmod "0755", "${sh_target_dir}${start_file_name}";
 chmod "0755", "${sh_target_dir}${stop_file_name}";
 
+if( -e "${sh_target_dir}${start_file_name}" and -e "${sh_target_dir}${stop_file_name}" )
+{
+    print "Copied start/stop scripts to ${sh_target_dir}\n";
+}
+else
+{
+    croak "Failed to setup start/stop scripts in ${sh_target_dir}\n";
+}
+
 unless( -e $systemd_service_dir )
 {
     croak 'Is systemd installed??';
 }
 
-copy( "${install_dir}/service/event_manager.service", $systemd_service_dir );
+unless( copy( "${install_dir}/service/event_manager.service", $systemd_service_dir ) )
+{
+    print "source dir is ${install_dir}/service/event_manager.service\n";
+    croak "Failed to copy file to $systemd_service_dir: $OS_ERROR";
+}
+
 my $result = system( "systemd-analyze verify ${systemd_service_dir}/event_manager.service" );
 
 if( $result )
@@ -206,4 +222,5 @@ if( $result )
     croak "Service installation failed";
 }
 
+system( 'systemctl enable event_manager.service' );
 exit 0;
