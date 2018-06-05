@@ -38,6 +38,7 @@ struct query {
 };
 
 struct query * _new_query( char * );
+struct query * _finalize_query( struct query * );
 struct query * _add_parameter_to_query( struct query *, char *, char * );
 void _free_query( struct query * );
 void _debug_struct( struct query * );
@@ -78,6 +79,100 @@ struct query * _new_query( char * query_string )
     strcpy( (char * )( query_object->query_string ), query_string );
     query_object->_bind_count = 0;
     query_object->_bind_list = NULL;
+
+    return query_object;
+}
+
+struct query * _finalize_query( struct query * query_object )
+{
+    regex_t regex;
+    regmatch_t matches[MAX_REGEX_GROUPS + 1];
+    char * temp_query;
+    int    reg_result = 0;
+    int    bindpoint_length = 0;
+    int    i;
+    char * bind_search = "[?][:word:]+[?]";
+    char * bind_replace = "NULL";
+
+    reg_result = regcomp( &regex, bind_search, REG_EXTENDED );
+
+    if( reg_result != 0 )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to compile regular expression"
+        );
+
+        _free_query( query_object );
+        return NULL;
+    }
+
+    for( i = 0; i < MAX_REGEX_MATCHES; i++ )
+    {
+        reg_result = regexec(
+            &regex,
+            query_object->query_string,
+            MAX_REGEX_GROUPS,
+            matches,
+            0
+        );
+
+        if( matches[0].rm_so == -1 || reg_result == REG_NOMATCH )
+        {
+            break;
+        }
+        else if( reg_result != 0 )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to execute regular expression"
+            );
+            _free_query( query_object );
+            regfree( &regex );
+            return NULL;
+        }
+
+        bindpoint_length = matches[0].rm_eo - matches[0].rm_so;
+        temp_query = ( char * ) malloc(
+            sizeof( char )
+          * (
+                strlen( query_object->query_string )
+             - bindpoint_length
+             + strlen( bind_replace )
+             + 1
+            )
+        );
+
+        if( temp_query == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for string resize operation"
+            );
+            _free_query( query_object );
+            regfree( &regex );
+            return NULL;
+        }
+
+        strncpy( temp_query, query_object->query_string, matches[0].rm_so );
+        strcat( temp_query, bind_replace );
+        strcat( temp_query, ( char * ) ( query_object->query_string + matches[0].rm_eo ) );
+
+        query_object->query_string = ( char * ) realloc(
+            ( void * ) query_object->query_string,
+            strlen( temp_query ) + 1
+        );
+
+        if( query_object->query_string == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to reallocate memory for query string"
+            );
+            free( temp_query );
+            regfree( &regex );
+        }
+    }
 
     return query_object;
 }

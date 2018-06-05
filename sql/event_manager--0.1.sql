@@ -163,7 +163,8 @@ RETURNS TRIGGER AS
 DECLARE
     my_work_item_query  VARCHAR;
 BEGIN
-    my_work_item_query := regexp_replace( NEW.work_item_query, '\?\w+\?', 'NULL', 'g' );
+    my_work_item_query := regexp_replace( NEW.work_item_query, '\?[\.\w]+\?', 'NULL', 'g' );
+
     EXECUTE 'CREATE TEMP TABLE tt_work_item_test AS( ' || my_work_item_query || ' LIMIT 0)';
 
     PERFORM a.attname

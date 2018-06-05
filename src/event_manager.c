@@ -33,7 +33,6 @@
 #include "lib/util.h"
 
 /* Constants */
-#define DEBUG
 #define MAX_CONN_RETRIES 3
 
 // Channels
@@ -541,6 +540,8 @@ void event_queue_handler( void )
             value
         );
     }
+
+    work_item_query_obj = _finalize_query( work_item_query_obj );
 
     if( work_item_query_obj == NULL )
     {
