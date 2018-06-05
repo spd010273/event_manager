@@ -21,6 +21,21 @@ use File::Glob;
 Readonly my $VERSION => '0.1';
 Readonly my $TESTDIR => './test/';
 Readonly my $VALGRIND_PREFIX => "valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all ";
+Readonly my $USAGE_MESSAGE => <<"USAGE";
+Usage:
+    $0 -U <username> -d <dbname> -h <hostname> -p <port>
+        -U db user name (default: postgres)
+        -d db name (default: -U value )
+        -p db port (default: 5432 )
+        -h host name (default: localhost)
+      [ -v  Prints version ]
+      [ -l  list tests ]
+      [ -D  Debug flag (show error detail) ]
+      [ -V  With Valgrind ]
+USAGE
+
+$Getopt::Std::OUTPUT_HELP_VERSION = $VERSION;
+$Getopt::Std::STANDARD_HELP_VERSION = 1;
 
 my $username;
 my $dbname;
@@ -31,6 +46,16 @@ my @children;
 my $use_valgrind = 0;
 my $manager_running = 0;
 my $manager_should_be_running = 0;
+
+sub HELP_MESSAGE()
+{
+    usage();
+}
+
+sub VERSION_MESSAGE()
+{
+    print "Event Manager Version $VERSION - Test Suite\n";
+}
 
 sub usage(;$)
 {
@@ -47,19 +72,7 @@ sub usage(;$)
         warn "$message\n";
     }
 
-    my $usage = <<"USAGE";
-    Usage:
-        $0 -U <username> -d <dbname> -h <hostname> -p <port>
-            -U db user name (default: postgres)
-            -d db name (default: -U value )
-            -p db port (default: 5432 )
-            -h host name (default: localhost)
-          [ -v  Prints version ]
-          [ -l  list tests ]
-          [ -D  Debug flag (show error detail) ]
-          [ -V  With Valgrind ]
-USAGE
-    warn "$usage\n";
+    warn "$USAGE_MESSAGE\n";
 
     exit 1;
 }

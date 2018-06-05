@@ -46,6 +46,8 @@ Some guidelines to work queries:
 * It goes without saying that due to this, there is a real SQL injection risk if you allow users to insert directly into these tables
 * Work item queries can have a bindpoint make multiple appearances in the same query
 * Work item queries that generate multiple rows will result in multiple actions (1:1 to query output)
+* Work item queries will have access to the trigger's copy of row psuedorecords NEW and OLD. These will appead in the new and old JSONB entries in tb_work_queue, and can be bound in with ?NEW.<record_column_name>? or ?OLD.<record_column_name>?, for example
+* Any unbound placeholders will be replaced with SQL NULL upon execution
 
 ## Actions
 

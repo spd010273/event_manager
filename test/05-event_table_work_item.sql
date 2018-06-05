@@ -18,7 +18,7 @@ DO
 BEGIN
     PERFORM *
        FROM event_manager.tb_event_table_work_item;
-    
+
     IF NOT FOUND THEN
         RAISE EXCEPTION 'FAILED: create event_table_work_item';
         RETURN;

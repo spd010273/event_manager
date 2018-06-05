@@ -15,12 +15,13 @@ CREATE TABLE @extschema@.tb_event_table
     event_table INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table'),
     schema_name VARCHAR NOT NULL DEFAULT 'public',
     table_name  VARCHAR(63) NOT NULL UNIQUE,
-    column_name VARCHAR[]
+    no_trigger  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 COMMENT ON TABLE @extschema@.tb_event_table IS 'Stores tables being watched for events';
 COMMENT ON COLUMN @extschema@.tb_event_table.schema_name IS 'Stores the schema to which the table belongs';
 COMMENT ON COLUMN @extschema@.tb_event_table.table_name IS 'Stores the table name of the relation';
+COMMENT ON COLUMN @extschema@.tb_event_table.no_trigger IS 'Indicates that this entry is only referenced by target_event_table (to be used by middleware for determining scope of action)';
 
 CREATE SEQUENCE @extschema@.sq_pk_action;
 CREATE TABLE @extschema@.tb_action
@@ -78,6 +79,8 @@ CREATE TABLE @extschema@.tb_event_queue
     transaction_label       VARCHAR,
     work_item_query         TEXT,
     action                  INTEGER,
+    old                     JSONB,
+    new                     JSONB,
     CHECK( (  op IN( 'D', 'U', 'I' ) ) )
 );
 
@@ -218,6 +221,8 @@ DECLARE
     my_when_function            VARCHAR;
     my_when_result              BOOLEAN;
     my_record                   RECORD;
+    new_record                  JSONB;
+    old_record                  JSONB;
     my_uid                      INTEGER;
     my_transaction_label        VARCHAR;
     my_action                   INTEGER;
@@ -227,15 +232,21 @@ DECLARE
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
         my_record := NEW;
+        new_record := to_jsonb( NEW );
+        old_record := NULL;
     ELSIF( TG_OP = 'UPDATE' ) THEN
         IF( NEW::VARCHAR IS DISTINCT FROM OLD::VARCHAR ) THEN
             my_record := NEW;
+            new_record := to_jsonb( NEW );
+            old_record := to_jsonb( OLD );
         ELSE
             -- Reject dubious UPDATE
             RETURN NEW;
         END IF;
     ELSE
         my_record := OLD;
+        old_record := to_jsonb( OLD );
+        new_record := NULL;
     END IF;
 
     IF( TG_ARGV[0] IS NULL ) THEN
@@ -293,7 +304,9 @@ BEGIN
                             execute_asynchronously,
                             transaction_label,
                             work_item_query,
-                            action
+                            action,
+                            old,
+                            new
                         )
                  VALUES
                         (
@@ -305,7 +318,9 @@ BEGIN
                             my_execute_asynchronously,
                             my_transaction_label,
                             my_work_item_query,
-                            my_action
+                            my_action,
+                            old_record,
+                            new_record
                         );
         END IF;
     END LOOP;
@@ -338,6 +353,10 @@ INNER JOIN pg_constraint cn
         RAISE EXCEPTION 'Target table, %.% needs to have a surrogate integer primary key!',
             NEW.schema_name,
             NEW.table_name;
+    END IF;
+
+    IF( NEW.no_trigger IS TRUE ) THEN
+        RETURN NEW;
     END IF;
 
     EXECUTE format(
@@ -386,6 +405,8 @@ DECLARE
     my_parameters   JSONB;
     my_uid          INTEGER;
     my_action       INTEGER;
+    my_key          VARCHAR;
+    my_value        VARCHAR;
 BEGIN
     my_is_async := TRUE;
     SELECT COALESCE(
@@ -418,6 +439,21 @@ BEGIN
     my_query := regexp_replace( my_query, '\?op\?', NEW.op::VARCHAR, 'g' );
     my_query := regexp_replace( my_query, '\?event_table_work_item\?', NEW.event_table_work_item::VARCHAR, 'g' );
 
+    FOR my_key, my_value IN(
+                                SELECT 'OLD.' || key,
+                                       value
+                                  FROM jsonb_each_text( NEW.old )
+                                 UNION ALL
+                                SELECT 'NEW.' || key,
+                                       value
+                                  FROM jsonb_each_text( NEW.new )
+                           ) LOOP
+        my_query := regexp_replace( my_query, '\?' || my_key || '\?', my_value, 'g' );
+    END LOOP;
+
+    -- Replace any remaining bindpoints with NULL
+    my_query := regexp_replace( my_query, '\?\w+\?', 'NULL', 'g' );
+
     FOR my_parameters IN EXECUTE my_query LOOP
         INSERT INTO @extschema@.tb_work_queue
                     (
@@ -439,16 +475,18 @@ BEGIN
                     );
     END LOOP;
 
-    DELETE FROM @extschema@.tb_event_queue
-          WHERE event_table_work_item IS NOT DISTINCT FROM NEW.event_table_work_item
-            AND uid IS NOT DISTINCT FROM NEW.uid
-            AND recorded IS NOT DISTINCT FROM NEW.recorded
-            AND pk_value IS NOT DISTINCT FROM NEW.pk_value
-            AND op IS NOT DISTINCT FROM NEW.op
-            AND execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously
-            AND work_item_query IS NOT DISTINCT FROM NEW.work_item_query
-            AND transaction_label IS NOT DISTINCT FROM NEW.transaction_label
-            AND action IS NOT DISTINCT FROM NEW.action;
+    DELETE FROM @extschema@.tb_event_queue eq
+          WHERE eq.event_table_work_item IS NOT DISTINCT FROM NEW.event_table_work_item
+            AND eq.uid IS NOT DISTINCT FROM NEW.uid
+            AND eq.recorded IS NOT DISTINCT FROM NEW.recorded
+            AND eq.pk_value IS NOT DISTINCT FROM NEW.pk_value
+            AND eq.op IS NOT DISTINCT FROM NEW.op
+            AND eq.execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously
+            AND eq.work_item_query IS NOT DISTINCT FROM NEW.work_item_query
+            AND eq.transaction_label IS NOT DISTINCT FROM NEW.transaction_label
+            AND eq.action IS NOT DISTINCT FROM NEW.action
+            AND eq.old::VARCHAR IS NOT DISTINCT FROM NEW.old::VARCHAR
+            AND eq.new::VARCHAR IS NOT DISTINCT FROM NEW.new::VARCHAR;
 
     RETURN NULL;
 END
@@ -586,4 +624,28 @@ END
 CREATE TRIGGER tr_validate_when_function
     BEFORE INSERT OR UPDATE OF when_function ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_function();
+
+CREATE FUNCTION @extschema@.fn_validate_work_item_reference()
+RETURNS TRIGGER AS
+ $_$
+BEGIN
+    -- Perform sanity check on tb_event_table
+    PERFORM *
+       FROM @extschema@.tb_event_table et
+ INNER JOIN @extschema@.tb_event_table_work_item etwi
+         ON etwi.source_event_table = et.event_table
+        AND etwi.event_table_work_item = NEW.event_table_work_item
+      WHERE et.no_trigger IS TRUE;
+
+    IF FOUND THEN
+        RAISE EXCEPTION 'Event table work item references a table that does not have a trigger on it. Flip the no_trigger bit on tb_event_table prior to creating events on it';
+    END IF;
+    RETURN NEW;
+END
+ $_$
+    LANGUAGE 'plpgsql' STABLE PARALLEL UNSAFE;
+
+CREATE TRIGGER tr_event_table_triggering_sanity_check
+    AFTER INSERT OR UPDATE OF source_event_table ON @extschema@.tb_event_table_work_item
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_work_item_reference();
 

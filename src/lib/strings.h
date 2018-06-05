@@ -38,6 +38,8 @@ static const char * get_event_queue_item = "\
            eq.transaction_label, \
            eq.work_item_query, \
            eq.execute_asynchronously, \
+           eq.old, \
+           eq.new, \
            eq.ctid \
       FROM " EXTENSION_NAME ".tb_event_queue eq \
   ORDER BY eq.recorded DESC \
@@ -45,16 +47,18 @@ static const char * get_event_queue_item = "\
        FOR UPDATE SKIP LOCKED";
 
 static const char * delete_event_queue_item = "\
-DELETE FROM " EXTENSION_NAME ".tb_event_queue \
-      WHERE event_table_work_item = $1::INTEGER \
-        AND uid IS NOT DISTINCT FROM $2::INTEGER \
-        AND recorded = $3::TIMESTAMP \
-        AND pk_value = $4::INTEGER \
-        AND op = $5::CHAR(1) \
-        AND action = $6::INTEGER \
-        AND transaction_label IS NOT DISTINCT FROM $7::VARCHAR \
-        AND work_item_query = $8::TEXT \
-        AND ctid = $9::TID";
+DELETE FROM " EXTENSION_NAME ".tb_event_queue eq \
+      WHERE eq.event_table_work_item = $1::INTEGER \
+        AND eq.uid IS NOT DISTINCT FROM $2::INTEGER \
+        AND eq.recorded = $3::TIMESTAMP \
+        AND eq.pk_value = $4::INTEGER \
+        AND eq.op = $5::CHAR(1) \
+        AND eq.action = $6::INTEGER \
+        AND eq.transaction_label IS NOT DISTINCT FROM $7::VARCHAR \
+        AND eq.work_item_query = $8::TEXT \
+        AND eq.old::TEXT IS NOT DISTINCT FROM $9::TEXT \
+        AND eq.new::TEXT IS NOT DISTINCT FROM $10::TEXT\
+        AND eq.ctid = $11::TID";
 
 static const char * get_work_queue_item = "\
    SELECT wq.parameters, \
@@ -104,7 +108,16 @@ static const char * get_action = "\
       FROM " EXTENSION_NAME ".tb_action a \
      WHERE a.action = $1";
 
-static const char * expand_jsonb = "\
+static const char * expand_jsonb_records = "\
+    SELECT 'NEW.' || key AS key, \
+           value \
+      FROM jsonb_each_text( $1::JSONB ) \
+     UNION ALL \
+    SELECT 'OLD.' || key AS key, \
+           value \
+      FROM jsonb_each_text( $2::JSONB )";
+
+static const char * expand_jsonb_parameters = "\
     SELECT key, \
            value \
       FROM jsonb_each_text( $1 ) \

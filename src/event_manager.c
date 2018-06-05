@@ -84,7 +84,8 @@ bool execute_action( PGconn *, PGresult *, int );
 bool execute_action_query( PGconn *, char *, char *, char *, char *, char *, char * );
 bool execute_remote_uri_call( PGconn *,  char *, char *, char *, char * );
 bool set_uid( char * );
-PGresult * get_parameters( PGconn *, char *, char * );
+PGresult * get_parameters( char *, char * );
+PGresult * expand_jsonb( char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
@@ -399,6 +400,7 @@ void event_queue_handler( void )
     PGresult * work_item_result;
     PGresult * delete_result;
     PGresult * insert_result;
+    PGresult * jsonb_result;
 
     struct query * work_item_query_obj = NULL;
 
@@ -415,10 +417,15 @@ void event_queue_handler( void )
     char * op;
     char * ctid;
     char * event_table_work_item;
+    char * old;
+    char * new;
 
+    char * key;
+    char * value;
     char * parameters;
-    char * params[9];
+    char * params[11];
     int    i;
+    int    jsonb_row_count;
 
     if( !_begin_transaction() )
     {
@@ -473,6 +480,8 @@ void event_queue_handler( void )
     event_table_work_item  = get_column_value( 0, result, "event_table_work_item" );
     op                     = get_column_value( 0, result, "op" );
     pk_value               = get_column_value( 0, result, "pk_value" );
+    old                    = get_column_value( 0, result, "old" );
+    new                    = get_column_value( 0, result, "new" );
 
     work_item_query_obj = _new_query( work_item_query );
 
@@ -505,6 +514,33 @@ void event_queue_handler( void )
         "recorded",
         recorded
     );
+
+    jsonb_result = expand_jsonb( new, old );
+
+    if( jsonb_result == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to expand JSONB OLD / NEW psuedorecords"
+        );
+        _free_query( work_item_query_obj );
+        PQclear( result );
+        _rollback_transaction();
+        return;
+    }
+
+    jsonb_row_count = PQntuples( jsonb_result );
+
+    for( i = 0; i < jsonb_row_count; i++ )
+    {
+        key = get_column_value( i, jsonb_result, "key" );
+        value = get_column_value( i, jsonb_result, "value" );
+        work_item_query_obj = _add_parameter_to_query(
+            work_item_query_obj,
+            key,
+            value
+        );
+    }
 
     if( work_item_query_obj == NULL )
     {
@@ -582,12 +618,14 @@ void event_queue_handler( void )
     params[5] = action;
     params[6] = transaction_label;
     params[7] = work_item_query;
-    params[8] = ctid;
+    params[8] = old;
+    params[9] = new;
+    params[10] = ctid;
 
     delete_result = _execute_query(
         ( char * ) delete_event_queue_item,
         params,
-        9,
+        11,
         true
     );
 
@@ -831,7 +869,7 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * m
 
     strcpy( param_list, "?" );
 
-    jsonb_result = get_parameters( conn, action, parameters );
+    jsonb_result = get_parameters( action, parameters );
 
     if( jsonb_result == NULL )
     {
@@ -1038,7 +1076,7 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
     char * value;
     int i;
 
-    parameter_result = get_parameters( conn, action, parameters );
+    parameter_result = get_parameters( action, parameters );
 
     if( parameter_result == NULL )
     {
@@ -1109,7 +1147,33 @@ bool execute_action_query( PGconn * conn, char * query, char * action, char * pa
     return true;
 }
 
-PGresult * get_parameters( PGconn * conn, char * action, char * parameters )
+PGresult * expand_jsonb( char * a, char * b )
+{
+    PGresult * jsonb_result;
+    char * params[2];
+
+    params[0] = a;
+    params[1] = b;
+
+    jsonb_result = _execute_query(
+        ( char * ) expand_jsonb_records,
+        params,
+        2,
+        true
+    );
+
+    if( jsonb_result == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to expand JSONB psuedorecords"
+        );
+    }
+
+    return jsonb_result;
+}
+
+PGresult * get_parameters( char * action, char * parameters )
 {
     PGresult * jsonb_result;
     char * params[2];
@@ -1118,7 +1182,7 @@ PGresult * get_parameters( PGconn * conn, char * action, char * parameters )
     params[1] = action;
 
     jsonb_result = _execute_query(
-        ( char * ) expand_jsonb,
+        ( char * ) expand_jsonb_parameters,
         params,
         2,
         true

@@ -1,8 +1,26 @@
 --require: event_manager
 
+BEGIN;
 UPDATE eventmanagertest.tb_a
    SET bar = 'asynchronous_test_1'
  WHERE foo = 'asynchronous_test_1';
+
+DO
+ $_$
+BEGIN
+    PERFORM *
+       FROM event_manager.tb_event_queue
+      WHERE new IS NOT NULL
+        AND old IS NOT NULL;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'FAILED: psuedorecords not populated';
+    END IF;
+    RETURN;
+END
+ $_$
+    LANGUAGE plpgsql;
+COMMIT;
 
 SELECT pg_sleep(10);
 
