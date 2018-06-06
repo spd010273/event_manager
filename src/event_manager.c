@@ -79,9 +79,9 @@ struct curl_response {
 void _queue_loop( const char *, void (*)(void) );
 void work_queue_handler( void );
 void event_queue_handler( void );
-bool execute_action( PGconn *, PGresult *, int );
-bool execute_action_query( PGconn *, char *, char *, char *, char *, char *, char * );
-bool execute_remote_uri_call( PGconn *,  char *, char *, char *, char * );
+bool execute_action( PGresult *, int );
+bool execute_action_query( char *, char *, char *, char *, char *, char * );
+bool execute_remote_uri_call( char *, char *, char *, char * );
 bool set_uid( char * );
 PGresult * get_parameters( char *, char * );
 PGresult * expand_jsonb( char *, char * );
@@ -96,7 +96,7 @@ bool _commit_transaction( void );
 bool _begin_transaction( void );
 
 // Integration functions
-void _cyanaudit_integration( PGconn *, char * );
+void _cyanaudit_integration( char * );
 
 // Program Entry
 int main( int, char ** );
@@ -723,7 +723,7 @@ void work_queue_handler( void )
             "Executing action"
         );
 
-        action_result = execute_action( conn, result, i );
+        action_result = execute_action( result, i );
 
         if( action_result == false )
         {
@@ -837,7 +837,7 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
     return real_size;
 }
 
-bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * method, char * parameters )
+bool execute_remote_uri_call( char * uri, char * action, char * method, char * parameters )
 {
     int malloc_size         = 0;
     int parameter_row_count = 0;
@@ -1067,7 +1067,7 @@ bool execute_remote_uri_call( PGconn * conn, char * uri, char * action, char * m
     return true;
 }
 
-bool execute_action_query( PGconn * conn, char * query, char * action, char * parameters, char * uid, char * recorded, char * transaction_label )
+bool execute_action_query( char * query, char * action, char * parameters, char * uid, char * recorded, char * transaction_label )
 {
     PGresult * parameter_result;
     PGresult * action_result;
@@ -1200,7 +1200,7 @@ PGresult * get_parameters( char * action, char * parameters )
     return jsonb_result;
 }
 
-bool execute_action( PGconn * conn, PGresult * result, int row )
+bool execute_action( PGresult * result, int row )
 {
     PGresult * action_result;
     bool       execute_action_result;
@@ -1265,7 +1265,6 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
         );
 
         execute_action_result = execute_action_query(
-            conn,
             query,
             action,
             parameters,
@@ -1276,7 +1275,7 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
 
         if( execute_action_result == true && cyanaudit_installed == true )
         {
-            _cyanaudit_integration( conn, transaction_label );
+            _cyanaudit_integration( transaction_label );
         }
     }
     else if( is_column_null( 0, action_result, "uri" ) == false )
@@ -1286,7 +1285,7 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
             "Executing API call"
         );
 
-        execute_action_result = execute_remote_uri_call( conn, uri, action, method, parameters );
+        execute_action_result = execute_remote_uri_call( uri, action, method, parameters );
     }
     else
     {
@@ -1302,7 +1301,7 @@ bool execute_action( PGconn * conn, PGresult * result, int row )
     return execute_action_result;
 }
 
-void _cyanaudit_integration( PGconn * conn, char * transaction_label )
+void _cyanaudit_integration( char * transaction_label )
 {
     PGresult * cyanaudit_result;
     char *     param[1];
