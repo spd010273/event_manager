@@ -47,9 +47,9 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     transaction_label       VARCHAR,
     work_item_query         TEXT NOT NULL,
     when_function           VARCHAR DEFAULT current_setting( '@extschema@.default_when_function', TRUE )::VARCHAR,
-    op                      CHAR(1),
+    op                      CHAR(1)[],
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
-    CHECK( ( op IN( 'D', 'I', 'U' ) ) )
+    CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 CREATE UNIQUE INDEX ix_source_action_target_unique ON @extschema@.tb_event_table_work_item(
     COALESCE( target_event_table, -1 ),
@@ -283,7 +283,7 @@ BEGIN
                                AND et.table_name = TG_TABLE_NAME::VARCHAR
                                AND et.schema_name = TG_TABLE_SCHEMA::VARCHAR
                                AND (
-                                        etwi.op = substr( TG_OP, 1, 1 )
+                                        substr( TG_OP, 1, 1 ) = ANY( etwi.op )
                                      OR etwi.op IS NULL
                                    )
                          ) LOOP
