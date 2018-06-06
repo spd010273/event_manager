@@ -381,6 +381,10 @@ CREATE FUNCTION @extschema@.fn_remove_event_trigger()
 RETURNS TRIGGER AS
  $_$
 BEGIN
+    IF( OLD.no_trigger IS TRUE ) THEN
+        RETURN OLD;
+    END IF;
+
     EXECUTE format(
                 'DROP TRIGGER tr_event_enqueue '
              || ' ON %I.%I',
