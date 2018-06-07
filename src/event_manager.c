@@ -28,9 +28,9 @@
 #include <signal.h>
 
 #include <curl/curl.h>
+#include "lib/util.h"
 #include "lib/strings.h"
 #include "lib/query_helper.h"
-#include "lib/util.h"
 
 /* Constants */
 #define MAX_CONN_RETRIES 3
@@ -52,12 +52,6 @@
 // SQL States
 #define SQL_STATE_TERMINATED_BY_ADMINISTRATOR "57P01"
 #define SQL_STATE_CANCELED_BY_ADMINISTRATOR "57014"
-
-#define LOG_LEVEL_WARNING "WARNING"
-#define LOG_LEVEL_ERROR "ERROR"
-#define LOG_LEVEL_FATAL "FATAL"
-#define LOG_LEVEL_DEBUG "DEBUG"
-#define LOG_LEVEL_INFO "INFO"
 
 // Global Variables
 PGconn * conn                = NULL;
@@ -83,8 +77,6 @@ bool execute_action( PGresult *, int );
 bool execute_action_query( char *, char *, char *, char *, char *, char * );
 bool execute_remote_uri_call( char *, char *, char *, char * );
 bool set_uid( char * );
-PGresult * get_parameters( char *, char * );
-PGresult * expand_jsonb( char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
@@ -399,7 +391,6 @@ void event_queue_handler( void )
     PGresult * work_item_result;
     PGresult * delete_result;
     PGresult * insert_result;
-    PGresult * jsonb_result;
 
     struct query * work_item_query_obj = NULL;
 
@@ -419,12 +410,9 @@ void event_queue_handler( void )
     char * old;
     char * new;
 
-    char * key;
-    char * value;
     char * parameters;
-    char * params[11];
+    char * params[8];
     int    i;
-    int    jsonb_row_count;
 
     if( !_begin_transaction() )
     {
@@ -514,32 +502,17 @@ void event_queue_handler( void )
         recorded
     );
 
-    jsonb_result = expand_jsonb( new, old );
+    work_item_query_obj = _add_json_parameter_to_query(
+        work_item_query_obj,
+        new,
+        "NEW."
+    );
 
-    if( jsonb_result == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to expand JSONB OLD / NEW psuedorecords"
-        );
-        _free_query( work_item_query_obj );
-        PQclear( result );
-        _rollback_transaction();
-        return;
-    }
-
-    jsonb_row_count = PQntuples( jsonb_result );
-
-    for( i = 0; i < jsonb_row_count; i++ )
-    {
-        key = get_column_value( i, jsonb_result, "key" );
-        value = get_column_value( i, jsonb_result, "value" );
-        work_item_query_obj = _add_parameter_to_query(
-            work_item_query_obj,
-            key,
-            value
-        );
-    }
+    work_item_query_obj = _add_json_parameter_to_query(
+        work_item_query_obj,
+        old,
+        "OLD."
+    );
 
     work_item_query_obj = _finalize_query( work_item_query_obj );
 
@@ -616,17 +589,14 @@ void event_queue_handler( void )
     params[2] = recorded;
     params[3] = pk_value;
     params[4] = op;
-    params[5] = action;
-    params[6] = transaction_label;
-    params[7] = work_item_query;
-    params[8] = old;
-    params[9] = new;
-    params[10] = ctid;
+    params[5] = old;
+    params[6] = new;
+    params[7] = ctid;
 
     delete_result = _execute_query(
         ( char * ) delete_event_queue_item,
         params,
-        11,
+        8,
         true
     );
 
@@ -657,12 +627,12 @@ void event_queue_handler( void )
 
 void work_queue_handler( void )
 {
-    PGresult * result;
-    PGresult * delete_result;
+    PGresult * result = NULL;
+    PGresult * delete_result = NULL;
 
-    bool   action_result;
+    bool   action_result = false;
     int    row_count = 0;
-    int    i;
+    int    i = 0;
     char * params[6];
 
     _log(
@@ -808,8 +778,8 @@ bool is_column_null( int row, PGresult * result, char * column_name )
 
 static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b, void * user_p )
 {
-    size_t real_size;
-    struct curl_response * response_page;
+    size_t real_size = 0;
+    struct curl_response * response_page = NULL;
 
     response_page = (struct curl_response *) user_p;
 
@@ -837,21 +807,12 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
     return real_size;
 }
 
-bool execute_remote_uri_call( char * uri, char * action, char * method, char * parameters )
+bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters )
 {
-    int malloc_size         = 0;
-    int parameter_row_count = 0;
-    int j;
-
-    PGresult * jsonb_result;
-    CURLcode   response;
-
-    char * remote_call;
-    char * param_list;
-    char * key;
-    char * value;
-
-    bool first_param_pass = true;
+    int malloc_size = 0;
+    CURLcode response;
+    char * remote_call = NULL;
+    char * param_list = NULL;
     struct curl_response write_buffer;
 
     malloc_size = 2;
@@ -870,66 +831,17 @@ bool execute_remote_uri_call( char * uri, char * action, char * method, char * p
 
     strcpy( param_list, "?" );
 
-    jsonb_result = get_parameters( action, parameters );
+    param_list = _add_json_parameters_to_param_list( param_list, parameters, &malloc_size );
+    param_list = _add_json_parameters_to_param_list( param_list, static_parameters, &malloc_size );
 
-    if( jsonb_result == NULL )
+    if( param_list == NULL )
     {
-        free( param_list );
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to substitute parameters in URI parameter list"
+        );
         return false;
     }
-
-    parameter_row_count = PQntuples( jsonb_result );
-
-    for( j = 0; j < parameter_row_count; j++ )
-    {
-        key   = get_column_value( j, jsonb_result, "key" );
-        value = get_column_value( j, jsonb_result, "value" );
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Reallocating memory for %s:%s",
-            key,
-            value
-        );
-        // Reallocate the string to contain ?... &<key>=<value>
-        malloc_size += strlen( key ) + strlen( value ) + 1;
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Malloc size is: %d",
-            malloc_size
-        );
-        if( first_param_pass == false )
-        {
-            malloc_size++;
-        }
-
-        param_list = ( char * ) realloc(
-            ( char * ) param_list,
-            sizeof( char ) * malloc_size
-        );
-
-        if( param_list == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Unable to expand parameter_string"
-            );
-            PQclear( jsonb_result );
-            return false;
-        }
-
-        if( first_param_pass == false )
-        {
-            strcat( param_list, "&" );
-        }
-
-        strcat( param_list, key );
-        strcat( param_list, "=" );
-        strcat( param_list, value );
-
-        first_param_pass = false;
-    }
-
-    PQclear( jsonb_result );
 
     remote_call = ( char * ) malloc(
         sizeof( char )
@@ -1067,24 +979,10 @@ bool execute_remote_uri_call( char * uri, char * action, char * method, char * p
     return true;
 }
 
-bool execute_action_query( char * query, char * action, char * parameters, char * uid, char * recorded, char * transaction_label )
+bool execute_action_query( char * query, char * static_parameters, char * parameters, char * uid, char * recorded, char * transaction_label )
 {
-    PGresult * parameter_result;
     PGresult * action_result;
     struct query * action_query;
-    int parameter_count;
-    char * key;
-    char * value;
-    int i;
-
-    parameter_result = get_parameters( action, parameters );
-
-    if( parameter_result == NULL )
-    {
-        return false;
-    }
-
-    parameter_count = PQntuples( parameter_result );
 
     action_query = _new_query( query );
 
@@ -1094,25 +992,26 @@ bool execute_action_query( char * query, char * action, char * parameters, char 
             LOG_LEVEL_ERROR,
             "Failed to initialize query struct"
         );
-        PQclear( parameter_result );
         return false;
     }
 
     action_query = _add_parameter_to_query( action_query, "uid", uid );
     action_query = _add_parameter_to_query( action_query, "recorded", recorded );
     action_query = _add_parameter_to_query( action_query, "transaction_label", transaction_label );
-
-    for( i = 0; i < parameter_count; i++ )
-    {
-        key   = get_column_value( i, parameter_result, "key" );
-        value = get_column_value( i, parameter_result, "value" );
-
-        action_query = _add_parameter_to_query( action_query, key, value );
-    }
-
-    PQclear( parameter_result );
+    _log( LOG_LEVEL_DEBUG, "PARAMS: %s", parameters );
+    action_query = _add_json_parameter_to_query( action_query, parameters, ( char * ) NULL );
+    action_query = _add_json_parameter_to_query( action_query, static_parameters, ( char * ) NULL );
     // Set UID
     set_uid( uid );
+
+    if( action_query == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Parameterization of action query failed"
+        );
+        return false;
+    }
 
     // Execute query_copy
     _log(
@@ -1148,116 +1047,34 @@ bool execute_action_query( char * query, char * action, char * parameters, char 
     return true;
 }
 
-PGresult * expand_jsonb( char * a, char * b )
-{
-    PGresult * jsonb_result;
-    char * params[2];
-
-    params[0] = a;
-    params[1] = b;
-
-    jsonb_result = _execute_query(
-        ( char * ) expand_jsonb_records,
-        params,
-        2,
-        true
-    );
-
-    if( jsonb_result == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to expand JSONB psuedorecords"
-        );
-    }
-
-    return jsonb_result;
-}
-
-PGresult * get_parameters( char * action, char * parameters )
-{
-    PGresult * jsonb_result;
-    char * params[2];
-
-    params[0] = parameters;
-    params[1] = action;
-
-    jsonb_result = _execute_query(
-        ( char * ) expand_jsonb_parameters,
-        params,
-        2,
-        true
-    );
-
-    if( jsonb_result == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to get static parameters for action"
-        );
-    }
-
-    return jsonb_result;
-}
-
 bool execute_action( PGresult * result, int row )
 {
-    PGresult * action_result;
     bool       execute_action_result;
 
     char * parameters        = NULL;
     char * uid               = NULL;
     char * recorded          = NULL;
     char * transaction_label = NULL;
-    char * action            = NULL;
-    char * params[1];
-
-    char * query  = NULL;
-    char * uri    = NULL;
-    char * method = NULL;
+    char * method            = NULL;
+    char * static_parameters = NULL;
+    char * uri               = NULL;
+    char * query             = NULL;
 
     parameters        = get_column_value( row, result, "parameters" );
     uid               = get_column_value( row, result, "uid" );
     recorded          = get_column_value( row, result, "recorded" );
     transaction_label = get_column_value( row, result, "transaction_label" );
-    action            = get_column_value( row, result, "action" );
+    uri               = get_column_value( row, result, "uri" );
 
-    params[0] = action;
-
-    action_result = _execute_query(
-        ( char * ) get_action,
-        params,
-        1,
-        true
-    );
-
-    if( action_result == NULL )
+    if( is_column_null( row, result, "static_parameters" ) == false )
     {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to get action detail"
-        );
-
-        return false;
+        static_parameters = get_column_value( row, result, "static_parameters" );
     }
 
-    if( PQntuples( action_result ) <= 0 )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Expected 1 row for action, got %d",
-            PQntuples( action_result )
-        );
-
-        PQclear( action_result );
-        return false;
-    }
-
-    query  = get_column_value( 0, action_result, "query" );
-    uri    = get_column_value( 0, action_result, "uri" );
-    method = get_column_value( 0, action_result, "method" );
-
-    if( is_column_null( 0, action_result, "query" ) == false )
+    method            = get_column_value( row, result, "method" );
+    query             = get_column_value( row, result, "query" );
+    
+    if( is_column_null( 0, result, "query" ) == false )
     {
         _log(
             LOG_LEVEL_DEBUG,
@@ -1266,7 +1083,7 @@ bool execute_action( PGresult * result, int row )
 
         execute_action_result = execute_action_query(
             query,
-            action,
+            static_parameters,
             parameters,
             uid,
             recorded,
@@ -1278,14 +1095,19 @@ bool execute_action( PGresult * result, int row )
             _cyanaudit_integration( transaction_label );
         }
     }
-    else if( is_column_null( 0, action_result, "uri" ) == false )
+    else if( is_column_null( 0, result, "uri" ) == false )
     {
         _log(
             LOG_LEVEL_DEBUG,
             "Executing API call"
         );
 
-        execute_action_result = execute_remote_uri_call( uri, action, method, parameters );
+        execute_action_result = execute_remote_uri_call(
+            uri,
+            static_parameters,
+            method,
+            parameters
+        );
     }
     else
     {
@@ -1297,7 +1119,6 @@ bool execute_action( PGresult * result, int row )
         execute_action_result = false;
     }
 
-    PQclear( action_result );
     return execute_action_result;
 }
 

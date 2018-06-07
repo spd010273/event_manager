@@ -20,15 +20,12 @@
 #include <math.h>
 
 #include "util.h"
+#include "jsmn/jsmn.h"
 
 #define MAX_REGEX_GROUPS 1
 #define MAX_REGEX_MATCHES 100
 
-#define LOG_LEVEL_WARNING "WARNING"
-#define LOG_LEVEL_ERROR "ERROR"
-#define LOG_LEVEL_FATAL "FATAL"
-#define LOG_LEVEL_DEBUG "DEBUG"
-#define LOG_LEVEL_INFO "INFO"
+#define JSON_TOKENS 16
 
 struct query {
     char *  query_string;
@@ -40,6 +37,10 @@ struct query {
 struct query * _new_query( char * );
 struct query * _finalize_query( struct query * );
 struct query * _add_parameter_to_query( struct query *, char *, char * );
+struct query * _add_json_parameter_to_query( struct query *, char *, char * );
+jsmntok_t * json_tokenise( char *,int * );
+char * _add_json_parameters_to_param_list( char *, char *, int * );
+
 void _free_query( struct query * );
 void _debug_struct( struct query * );
 
@@ -87,12 +88,31 @@ struct query * _finalize_query( struct query * query_object )
 {
     regex_t regex;
     regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char * temp_query;
+    char * temp_query = NULL;
     int    reg_result = 0;
     int    bindpoint_length = 0;
-    int    i;
+    int    i = 0;
     char * bind_search = "[?][:word:]+[?]";
     char * bind_replace = "NULL";
+
+    if( query_object == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "NULL query object passed"
+        );
+        return NULL;
+    }
+
+    if( query_object->query_string == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "NULL query string passed in object"
+        );
+        _free_query( query_object );
+        return NULL;
+    }
 
     reg_result = regcomp( &regex, bind_search, REG_EXTENDED );
 
@@ -181,14 +201,23 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
 {
     regex_t    regex;
     regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char *     temp_query;
+    char *     temp_query = NULL;
     int        reg_result = 0;
-    int        i;
+    int        i = 0;
 
     int    bind_length       = 0;
     int    bind_counter      = 0;
     char * bindpoint_search  = NULL;
     char * bindpoint_replace = NULL;
+
+    if( query_object == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "NULL query_object passed"
+        );
+        return NULL;
+    }
 
     if( query_object->query_string == NULL )
     {
@@ -376,9 +405,224 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
     return query_object;
 }
 
+struct query * _add_json_parameter_to_query( struct query * query_obj, char * json_string, char * key_prefix )
+{
+    int i = 0;
+    int j = 0;
+    int end_index = 0;
+    jsmntok_t * json_tokens = NULL;
+    jsmntok_t json_key_token;
+    jsmntok_t json_value_token;
+    jsmntok_t temp_token;
+    int max_tokens = 0;
+    char * key = NULL;
+    char * value = NULL;
+    int key_size_offset = 0;
+
+    if( json_string == NULL )
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Nothing to bind"
+        );
+        return query_obj;
+    }
+
+    if( query_obj == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Cannot add parameter to NULL object"
+        );
+        return NULL;
+    }
+
+    if( query_obj->query_string == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Cannot parameterize NULL query string"
+        );
+        _free_query( query_obj );
+        return NULL;
+    }
+
+    json_tokens = json_tokenise( json_string, &max_tokens );
+
+    if( json_tokens == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to tokenise JSON string for binding to query"
+        );
+        return NULL;
+    }
+
+    // JSMN returns OBJECT, KEY, VALUE, ...
+    //  We're expecting at least an object with one key and one value
+    if( json_tokens[0].type != JSMN_OBJECT )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Root element of JSON response is not an object"
+        );
+        return NULL;
+    }
+
+    if( max_tokens < 3 )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "JSON response is empty"
+        );
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Got '%s', (%d tokens )",
+            json_string,
+            max_tokens
+        );
+        return NULL;
+    }
+
+    i = 1;
+    _log( LOG_LEVEL_DEBUG, "Parsing JSON '%s'", json_string );
+
+    if( key_prefix != NULL )
+    {
+        key_size_offset = strlen( key_prefix );
+    }
+
+    for(;;)
+    {
+        json_key_token = json_tokens[i];
+
+        if( json_key_token.type != JSMN_STRING )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Expected string key in JSON structure (got %d at index %d)",
+                json_key_token.type,
+                i
+            );
+            free( json_tokens );
+            return NULL;
+        }
+
+        key = ( char * ) malloc(
+            sizeof( char )
+          * ( json_key_token.end - json_key_token.start + 1 + key_size_offset )
+        );
+
+        if( key == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for JSON key string"
+            );
+
+            free( json_tokens );
+            return NULL;
+        }
+
+        if( key_prefix != NULL )
+        {
+            strcpy( key, key_prefix );
+        }
+
+        strncpy(
+            key,
+            ( char * ) ( json_string + json_key_token.start ),
+            json_key_token.end - json_key_token.start
+        );
+
+        key[json_key_token.end - json_key_token.start] = '\0';
+
+        i++;
+
+        if( i >= ( max_tokens ) )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Reached unexpected end of JSON object"
+            );
+            free( key );
+            free( json_tokens );
+            return NULL;
+        }
+
+        json_value_token = json_tokens[i];
+
+        value = ( char * ) malloc(
+            sizeof( char )
+          * ( json_value_token.end - json_value_token.start + 1 )
+        );
+
+        if( value == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for JSON value string"
+            );
+
+            free( json_tokens );
+            free( key );
+            return NULL;
+        }
+
+        strncpy(
+            value,
+            ( char * ) ( json_string + json_value_token.start ),
+            json_value_token.end - json_value_token.start
+        );
+
+        value[json_value_token.end - json_value_token.start] = '\0';
+
+        if( json_value_token.type == JSMN_OBJECT || json_value_token.type == JSMN_ARRAY )
+        {
+            // index i to point to the next key by finding the index of the
+            //  first token that is >= our value's end index
+            end_index = json_value_token.end;
+
+            for( j = i; j < max_tokens; j++ )
+            {
+                temp_token = json_tokens[j];
+                if( temp_token.start >= end_index )
+                {
+                    i = j;
+                    break;
+                }
+            }
+
+            // The value which is an object or key somehow was last thing in our json object
+            i = max_tokens;
+        }
+
+        query_obj = _add_parameter_to_query(
+            query_obj,
+            key,
+            value
+        );
+
+        _log( LOG_LEVEL_DEBUG, "Potentially bound KV: %s,%s", key, value );
+        free( key );
+        free( value );
+
+        if( i >=  ( max_tokens - 1 ) )
+        {
+            break;
+        }
+
+        i++;
+    }
+
+    free( json_tokens );
+    return query_obj;
+}
+
 void _debug_struct( struct query * obj )
 {
-    int i;
+    int i = 0;
     _log( LOG_LEVEL_DEBUG, "Query object: " );
     _log( LOG_LEVEL_DEBUG, "==============" );
     _log( LOG_LEVEL_DEBUG, "query_string: '%s'", obj->query_string );
@@ -395,7 +639,7 @@ void _debug_struct( struct query * obj )
 
 void _free_query( struct query * query_object )
 {
-    int i;
+    int i = 0;
     if( query_object == NULL )
     {
         return;
@@ -423,4 +667,276 @@ void _free_query( struct query * query_object )
     }
 
     return;
+}
+
+char * _add_json_parameters_to_param_list( char * param_list, char * json_string, int * malloc_size )
+{
+    jsmntok_t * json_tokens = NULL;
+    jsmntok_t json_key_token;
+    jsmntok_t json_value_token;
+    jsmntok_t temp_token;
+    int end_index = 0;
+    int j = 0;
+    int i = 0;
+    bool first_param_pass = true;
+    int max_tokens = 0;
+
+    if( param_list == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Received NULL URI parameter list"
+        );
+
+        return NULL;
+    }
+
+    if( json_string == NULL )
+    {
+        _log( LOG_LEVEL_DEBUG, "Nothing to bind" );
+        return param_list;
+    }
+
+    json_tokens = json_tokenise( json_string, &max_tokens );
+
+    if( json_tokens == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to tokenise JSON string for binding to parameter_list"
+        );
+        return NULL;
+    }
+
+    // JSMN returns OBJECT, KEY, VALUE, ...
+    //  We're expecting at least an object with one key and one value
+    if( json_tokens[0].type != JSMN_OBJECT )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Root element of JSON response is not an object"
+        );
+        return NULL;
+    }
+
+    if( max_tokens < 3 )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "JSON response is empty"
+        );
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Got '%s', (%d tokens )",
+            json_string,
+            max_tokens
+        );
+        return NULL;
+    }
+
+    i = 1;
+
+    _log( LOG_LEVEL_DEBUG, "Parsing JSON '%s'", json_string );
+
+    for(;;)
+    {
+        json_key_token = json_tokens[i];
+
+        if( json_key_token.type != JSMN_STRING )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Expected string key in JSON structure (got %d at index %d)",
+                json_key_token.type,
+                i
+            );
+            free( json_tokens );
+            free( param_list );
+            return NULL;
+        }
+
+        *malloc_size = *malloc_size + json_key_token.end - json_key_token.start + 1;
+
+        if( first_param_pass == true )
+        {
+            *malloc_size = *malloc_size - 1;
+        }
+
+        param_list = ( char * ) realloc(
+            ( char * ) param_list,
+            sizeof( char ) * (*malloc_size)
+        );
+
+        if( param_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to reallocate memory for parameter string key"
+            );
+            free( json_tokens );
+            return NULL;
+        }
+
+        if( first_param_pass == false )
+        {
+            strcat( param_list, "&" );
+        }
+
+        first_param_pass = false;
+
+        strncpy(
+            param_list,
+            ( char * ) ( json_string + json_key_token.start ),
+            json_key_token.end - json_key_token.start
+        );
+
+        param_list[*malloc_size] = '\0';
+
+        i++;
+
+        if( i >= ( max_tokens ) )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Reached unexpected end of JSON object"
+            );
+            free( param_list );
+            free( json_tokens );
+            return NULL;
+        }
+
+        json_value_token = json_tokens[i];
+
+        *malloc_size = *malloc_size + json_value_token.end - json_key_token.start + 1;
+        param_list = ( char * ) realloc(
+            ( char * ) param_list,
+            *malloc_size
+        );
+
+        if( param_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to reallocate memory for parameter string value"
+            );
+            free( json_tokens );
+            return NULL;
+        }
+
+        strcat( param_list, "=" );
+        strncpy(
+            param_list,
+            ( char * ) ( json_string + json_value_token.start ),
+            json_value_token.end - json_value_token.start
+        );
+
+        param_list[*malloc_size] = '\0';
+
+        if( json_value_token.type == JSMN_OBJECT || json_value_token.type == JSMN_ARRAY )
+        {
+            // index i to point to the next key by finding the index of the
+            //  first token that is >= our value's end index
+            end_index = json_value_token.end;
+
+            for( j = i; j < max_tokens; j++ )
+            {
+                temp_token = json_tokens[j];
+                if( temp_token.start >= end_index )
+                {
+                    i = j;
+                    break;
+                }
+            }
+
+            // The value which is an object or key somehow was last thing in our json object
+            i = max_tokens;
+        }
+
+        if( i >=  ( max_tokens - 1 ) )
+        {
+            break;
+        }
+
+        i++;
+    }
+
+    free( json_tokens );
+    return param_list;
+}
+
+jsmntok_t * json_tokenise( char * json, int * token_count )
+{
+    jsmn_parser parser;
+    int jsmn_rc = 0;
+    jsmntok_t * tokens = NULL;
+    unsigned int n = JSON_TOKENS;
+
+    jsmn_init( &parser );
+
+    tokens = ( jsmntok_t * ) malloc(
+        sizeof( jsmntok_t )
+      * n
+    );
+
+    if( tokens == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for JSON tokenisation"
+        );
+        return NULL;
+    }
+
+    jsmn_rc = jsmn_parse( &parser, json, strlen( json ), tokens, n );
+
+    // Keep reallocating memory in JSON_TOKENS chunks until
+    // The entire JSON structure can fit
+
+    while( jsmn_rc == JSMN_ERROR_NOMEM )
+    {
+        n = n + JSON_TOKENS;
+
+        tokens = realloc(
+            tokens,
+            sizeof( jsmntok_t )
+          * n
+        );
+
+        if( tokens == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to reallocate memory for JSON tokenisation"
+            );
+            return NULL;
+        }
+
+        jsmn_rc = jsmn_parse( &parser, json, strlen( json ), tokens, n );
+    }
+
+    if( jsmn_rc == JSMN_ERROR_INVAL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to parse JSON string: invalid or corrupted string"
+        );
+
+        free( tokens );
+        return NULL;
+    }
+
+    if( jsmn_rc == JSMN_ERROR_PART )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to parse JSON string: received invalid partial string"
+        );
+        free( tokens );
+
+        return NULL;
+    }
+
+    *token_count = jsmn_rc;
+    return tokens;
 }

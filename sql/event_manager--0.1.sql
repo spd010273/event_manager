@@ -75,10 +75,10 @@ CREATE TABLE @extschema@.tb_event_queue
     recorded                TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     pk_value                INTEGER NOT NULL,
     op                      CHAR(1),
-    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
-    transaction_label       VARCHAR,
-    work_item_query         TEXT,
-    action                  INTEGER,
+--    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
+--    transaction_label       VARCHAR,
+--    work_item_query         TEXT,
+--    action                  INTEGER,
     old                     JSONB,
     new                     JSONB,
     CHECK( (  op IN( 'D', 'U', 'I' ) ) )
@@ -225,10 +225,10 @@ DECLARE
     new_record                  JSONB;
     old_record                  JSONB;
     my_uid                      INTEGER;
-    my_transaction_label        VARCHAR;
-    my_action                   INTEGER;
-    my_execute_asynchronously   BOOLEAN;
-    my_work_item_query          VARCHAR;
+--    my_transaction_label        VARCHAR;
+--    my_action                   INTEGER;
+--    my_execute_asynchronously   BOOLEAN;
+--    my_work_item_query          VARCHAR;
     my_event_table_work_item    INTEGER;
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
@@ -265,18 +265,18 @@ BEGIN
        INTO my_uid;
 
     FOR my_when_function,
-        my_transaction_label,
-        my_action,
-        my_execute_asynchronously,
-        my_work_item_query,
+--        my_transaction_label,
+--        my_action,
+--        my_execute_asynchronously,
+--        my_work_item_query,
         my_event_table_work_item
                         IN(
-                            SELECT when_function,
-                                   transaction_label,
-                                   action,
-                                   execute_asynchronously,
-                                   work_item_query,
-                                   event_table_work_item
+                            SELECT etwi.when_function,
+--                                   transaction_label,
+--                                   action,
+--                                   execute_asynchronously,
+--                                   work_item_query,
+                                   etwi.event_table_work_item
                               FROM @extschema@.tb_event_table_work_item etwi
                         INNER JOIN @extschema@.tb_event_table et
                                 ON et.event_table = etwi.source_event_table
@@ -302,10 +302,10 @@ BEGIN
                             recorded,
                             pk_value,
                             op,
-                            execute_asynchronously,
-                            transaction_label,
-                            work_item_query,
-                            action,
+--                            execute_asynchronously,
+--                            transaction_label,
+--                            work_item_query,
+--                            action,
                             old,
                             new
                         )
@@ -316,10 +316,10 @@ BEGIN
                             now(),
                             my_pk_value,
                             substr( TG_OP, 1, 1 ),
-                            my_execute_asynchronously,
-                            my_transaction_label,
-                            my_work_item_query,
-                            my_action,
+--                            my_execute_asynchronously,
+--                            my_transaction_label,
+--                            my_work_item_query,
+--                            my_action,
                             old_record,
                             new_record
                         );
@@ -410,22 +410,31 @@ DECLARE
     my_parameters   JSONB;
     my_uid          INTEGER;
     my_action       INTEGER;
+    my_transaction_label    VARCHAR;
     my_key          VARCHAR;
     my_value        VARCHAR;
 BEGIN
     my_is_async := TRUE;
     SELECT COALESCE(
-               NEW.execute_asynchronously,
+               etwi.execute_asynchronously,
                CASE WHEN lower( value ) LIKE '%t%'
                     THEN TRUE
                     WHEN lower( value ) LIKE '%f%'
                     THEN FALSE
                     ELSE NULL
                      END
-           ) AS is_async
-      INTO my_is_async
-      FROM @extschema@.tb_setting
-     WHERE key = '@extschema@.execute_asynchronously';
+           ) AS is_async,
+           etwi.work_item_query,
+           etwi.action,
+           etwi.transaction_label
+      INTO my_is_async,
+           my_query,
+           my_action,
+           my_transaction_label
+      FROM @extschema@.tb_event_table_work_item etwi
+ LEFT JOIN @extschema@.tb_setting s
+        ON s.key = '@extschema@.execute_asynchronously'
+     WHERE etwi.event_table_work_item = NEW.event_table_work_item;
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_event_queue_item;
@@ -438,7 +447,7 @@ BEGIN
             ) || '::INTEGER'
       INTO my_uid;
 
-    my_query := regexp_replace( NEW.work_item_query, '\?pk_value\?', NEW.pk_value::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?pk_value\?', NEW.pk_value::VARCHAR, 'g' );
     my_query := regexp_replace( my_query, '\?recorded\?', NEW.recorded::VARCHAR, 'g' );
     my_query := regexp_replace( my_query, '\?uid\?', quote_nullable( NEW.uid::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?op\?', NEW.op::VARCHAR, 'g' );
@@ -474,8 +483,8 @@ BEGIN
                         my_parameters,
                         my_uid,
                         NEW.recorded,
-                        NEW.transaction_label,
-                        NEW.action,
+                        my_transaction_label,
+                        my_action,
                         my_is_async
                     );
     END LOOP;
@@ -486,10 +495,10 @@ BEGIN
             AND eq.recorded IS NOT DISTINCT FROM NEW.recorded
             AND eq.pk_value IS NOT DISTINCT FROM NEW.pk_value
             AND eq.op IS NOT DISTINCT FROM NEW.op
-            AND eq.execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously
-            AND eq.work_item_query IS NOT DISTINCT FROM NEW.work_item_query
-            AND eq.transaction_label IS NOT DISTINCT FROM NEW.transaction_label
-            AND eq.action IS NOT DISTINCT FROM NEW.action
+--            AND eq.execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously
+--            AND eq.work_item_query IS NOT DISTINCT FROM NEW.work_item_query
+--            AND eq.transaction_label IS NOT DISTINCT FROM NEW.transaction_label
+--            AND eq.action IS NOT DISTINCT FROM NEW.action
             AND eq.old::VARCHAR IS NOT DISTINCT FROM NEW.old::VARCHAR
             AND eq.new::VARCHAR IS NOT DISTINCT FROM NEW.new::VARCHAR;
 

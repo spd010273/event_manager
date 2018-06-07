@@ -46,8 +46,10 @@ DO
  $_$
 BEGIN
     PERFORM *
-       FROM event_manager.tb_event_queue
-      WHERE execute_asynchronously IS TRUE;
+       FROM event_manager.tb_event_queue eq
+ INNER JOIN event_manager.tb_event_table_work_item etwi
+         ON etwi.event_table_work_item = eq.event_table_work_item
+      WHERE etwi.execute_asynchronously IS TRUE;
 
     IF NOT FOUND THEN
         RAISE EXCEPTION 'FAILED: async_exec flag did not get carried on to queue item';

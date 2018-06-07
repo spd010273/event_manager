@@ -34,17 +34,19 @@ static const char * get_event_queue_item = "\
            eq.recorded, \
            eq.pk_value, \
            eq.op, \
-           eq.action, \
-           eq.transaction_label, \
-           eq.work_item_query, \
-           eq.execute_asynchronously, \
+           etwi.action, \
+           etwi.transaction_label, \
+           etwi.work_item_query, \
+           etwi.execute_asynchronously, \
            eq.old, \
            eq.new, \
            eq.ctid \
       FROM " EXTENSION_NAME ".tb_event_queue eq \
+INNER JOIN " EXTENSION_NAME ".tb_event_table_work_item etwi \
+        ON etwi.event_table_work_item = eq.event_table_work_item \
   ORDER BY eq.recorded DESC \
      LIMIT 1 \
-       FOR UPDATE SKIP LOCKED";
+       FOR UPDATE OF eq SKIP LOCKED";
 
 static const char * delete_event_queue_item = "\
 DELETE FROM " EXTENSION_NAME ".tb_event_queue eq \
@@ -53,24 +55,27 @@ DELETE FROM " EXTENSION_NAME ".tb_event_queue eq \
         AND eq.recorded = $3::TIMESTAMP \
         AND eq.pk_value = $4::INTEGER \
         AND eq.op = $5::CHAR(1) \
-        AND eq.action = $6::INTEGER \
-        AND eq.transaction_label IS NOT DISTINCT FROM $7::VARCHAR \
-        AND eq.work_item_query = $8::TEXT \
-        AND eq.old::TEXT IS NOT DISTINCT FROM $9::TEXT \
-        AND eq.new::TEXT IS NOT DISTINCT FROM $10::TEXT\
-        AND eq.ctid = $11::TID";
+        AND eq.old::TEXT IS NOT DISTINCT FROM $6::TEXT \
+        AND eq.new::TEXT IS NOT DISTINCT FROM $7::TEXT\
+        AND eq.ctid = $8::TID";
 
 static const char * get_work_queue_item = "\
-   SELECT wq.parameters, \
-          wq.uid, \
-          wq.recorded, \
-          wq.transaction_label, \
-          wq.action, \
-          wq.ctid \
-     FROM " EXTENSION_NAME ".tb_work_queue wq \
- ORDER BY wq.recorded DESC  \
-    LIMIT 1 \
-      FOR UPDATE SKIP LOCKED";
+    SELECT wq.parameters, \
+           a.static_parameters, \
+           a.uri, \
+           COALESCE( a.method, 'GET' ) AS method, \
+           a.query, \
+           wq.uid, \
+           wq.recorded, \
+           wq.transaction_label, \
+           wq.action, \
+           wq.ctid \
+      FROM " EXTENSION_NAME ".tb_work_queue wq \
+INNER JOIN " EXTENSION_NAME ".tb_action a \
+        ON a.action = wq.action \
+  ORDER BY wq.recorded DESC  \
+     LIMIT 1 \
+       FOR UPDATE OF wq SKIP LOCKED";
 
 static const char * delete_work_queue_item = "\
 DELETE FROM " EXTENSION_NAME ".tb_work_queue \
@@ -100,34 +105,6 @@ INSERT INTO " EXTENSION_NAME ".tb_work_queue \
                 NULLIF( $5, '' )::INTEGER, \
                 NULLIF( $6, '' )::BOOLEAN \
             )";
-
-static const char * get_action = "\
-    SELECT a.query, \
-           a.uri, \
-           COALESCE( a.method, 'GET' ) AS method \
-      FROM " EXTENSION_NAME ".tb_action a \
-     WHERE a.action = $1";
-
-static const char * expand_jsonb_records = "\
-    SELECT 'NEW.' || key AS key, \
-           value \
-      FROM jsonb_each_text( $1::JSONB ) \
-     UNION ALL \
-    SELECT 'OLD.' || key AS key, \
-           value \
-      FROM jsonb_each_text( $2::JSONB )";
-
-static const char * expand_jsonb_parameters = "\
-    SELECT key, \
-           value \
-      FROM jsonb_each_text( $1 ) \
-     UNION \
-    SELECT key, \
-           value \
-      FROM " EXTENSION_NAME ".tb_action \
-INNER JOIN jsonb_each_text( static_parameters ) \
-        ON TRUE \
-     WHERE action = $2";
 
 static const char * _uid_function = "\
     SELECT current_setting( \

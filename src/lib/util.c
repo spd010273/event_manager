@@ -18,13 +18,7 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <signal.h>
-
-// Log Levels
-#define LOG_LEVEL_WARNING "WARNING"
-#define LOG_LEVEL_ERROR "ERROR"
-#define LOG_LEVEL_FATAL "FATAL"
-#define LOG_LEVEL_DEBUG "DEBUG"
-#define LOG_LEVEL_INFO "INFO"
+#include "util.h"
 
 #define VERSION 0.1
 
@@ -46,10 +40,9 @@ Usage: event_manager \
   [ -D debug mode \
     -v VERSION \
     -? HELP ]";
-
 void _parse_args( int, char ** );
 void _usage( char * ) __attribute__ ((noreturn));
-void _log( char *, char *, ... ) __attribute ((format (gnu_printf, 2, 3)));
+void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
 void __sigterm( int );
 void __sighup( int );
 

@@ -4,7 +4,7 @@
  *     Utility function prototypes
  *
  * Copyright (c) 2018, Nead Werx, Inc.
- * 
+ *
  * IDENTIFICATION
  *        util.h
  *
@@ -13,6 +13,12 @@
 
 #ifndef UTIL_H
 #define UTIL_H
+
+#define LOG_LEVEL_WARNING "WARNING"
+#define LOG_LEVEL_ERROR "ERROR"
+#define LOG_LEVEL_FATAL "FATAL"
+#define LOG_LEVEL_DEBUG "DEBUG"
+#define LOG_LEVEL_INFO "INFO"
 
 sig_atomic_t got_sighup;
 sig_atomic_t got_sigterm;
