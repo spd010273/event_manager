@@ -1,5 +1,4 @@
 [submodule "src/lib/jsmn"]
 	path = src/lib/jsmn
 	url = https://github.com/zserge/jsmn
-[submodule "src/lib/jsmn/"]
 	ignore = untracked
