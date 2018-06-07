@@ -3,3 +3,4 @@ event_manager
 *.so
 *.swp
 *.swo
+src/lib/jsmn/*
