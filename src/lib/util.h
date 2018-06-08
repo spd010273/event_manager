@@ -20,9 +20,6 @@
 #define LOG_LEVEL_DEBUG "DEBUG"
 #define LOG_LEVEL_INFO "INFO"
 
-sig_atomic_t got_sighup;
-sig_atomic_t got_sigterm;
-
 bool event_listener;
 bool work_listener;
 
@@ -31,7 +28,5 @@ char * conninfo;
 void _parse_args( int, char ** );
 void _usage( char * ) __attribute__ ((noreturn));
 void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
-void __sigterm( int );
-void __sighup( int );
 
 #endif

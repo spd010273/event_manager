@@ -60,6 +60,9 @@ bool     cyanaudit_installed = false;
 bool     enable_curl         = false;
 CURL *   curl_handle         = NULL;
 
+sig_atomic_t got_sighup  = false;
+sig_atomic_t got_sigterm = false;
+
 
 // Structures
 struct curl_response {
@@ -90,19 +93,22 @@ bool _begin_transaction( void );
 // Integration functions
 void _cyanaudit_integration( char * );
 
+// Signal Handlers
+void __sigterm( int ) __attribute__ ((noreturn));
+void __sighup( int );
+
 // Program Entry
 int main( int, char ** );
-
 
 /* Functions */
 PGresult * _execute_query( char * query, char ** params, int param_count, bool transaction_mode )
 {
-    PGresult * result;
+    PGresult * result            = NULL;
     int        retry_counter     = 0;
     int        last_backoff_time = 0;
     char *     last_sql_state    = NULL;
 #ifdef DEBUG
-    int        i;
+    int        i = 0;
 #endif
 
     if( conn == NULL )
@@ -254,16 +260,13 @@ PGresult * _execute_query( char * query, char ** params, int param_count, bool t
 
 void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 {
-    PGnotify * notify = NULL;
-    char *     listen_command;
-    PGresult * listen_result;
+    PGnotify * notify         = NULL;
+    char *     listen_command = NULL;
+    PGresult * listen_result  = NULL;
 
-    listen_command = ( char * ) malloc(
-        sizeof( char ) *
-        (
-            strlen( channel )
-          + 10
-        )
+    listen_command = ( char * ) calloc(
+        ( strlen( channel ) + 10 ),
+        sizeof( char )
     );
 
     if( listen_command == NULL )
@@ -387,32 +390,32 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
 void event_queue_handler( void )
 {
-    PGresult * result;
-    PGresult * work_item_result;
-    PGresult * delete_result;
-    PGresult * insert_result;
+    PGresult * result           = NULL;
+    PGresult * work_item_result = NULL;
+    PGresult * delete_result    = NULL;
+    PGresult * insert_result    = NULL;
 
     struct query * work_item_query_obj = NULL;
 
     // Values that need to be copied to work_queue
-    char * uid;
-    char * recorded;
-    char * transaction_label;
-    char * execute_asynchronously;
-    char * action;
+    char * uid                    = NULL;
+    char * recorded               = NULL;
+    char * transaction_label      = NULL;
+    char * execute_asynchronously = NULL;
+    char * action                 = NULL;
 
     // Var's we need
-    char * work_item_query;
-    char * pk_value;
-    char * op;
-    char * ctid;
-    char * event_table_work_item;
-    char * old;
-    char * new;
+    char * work_item_query       = NULL;
+    char * pk_value              = NULL;
+    char * op                    = NULL;
+    char * ctid                  = NULL;
+    char * event_table_work_item = NULL;
+    char * old                   = NULL;
+    char * new                   = NULL;
 
-    char * parameters;
-    char * params[8];
-    int    i;
+    char * parameters = NULL;
+    char * params[8]  = {NULL};
+    int    i          = 0;
 
     if( !_begin_transaction() )
     {
@@ -601,6 +604,7 @@ void event_queue_handler( void )
     );
 
     PQclear( result );
+    PQclear( work_item_result );
 
     if( delete_result == NULL )
     {
@@ -613,7 +617,6 @@ void event_queue_handler( void )
     }
 
     PQclear( delete_result );
-
     if( _commit_transaction() == false )
     {
         _log(
@@ -627,13 +630,13 @@ void event_queue_handler( void )
 
 void work_queue_handler( void )
 {
-    PGresult * result = NULL;
+    PGresult * result        = NULL;
     PGresult * delete_result = NULL;
 
     bool   action_result = false;
-    int    row_count = 0;
-    int    i = 0;
-    char * params[6];
+    int    row_count     = 0;
+    int    i             = 0;
+    char * params[6]     = {NULL};
 
     _log(
         LOG_LEVEL_DEBUG,
@@ -778,7 +781,7 @@ bool is_column_null( int row, PGresult * result, char * column_name )
 
 static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b, void * user_p )
 {
-    size_t real_size = 0;
+    size_t real_size                     = 0;
     struct curl_response * response_page = NULL;
 
     response_page = (struct curl_response *) user_p;
@@ -809,15 +812,13 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
 
 bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters )
 {
-    int malloc_size = 0;
-    CURLcode response;
-    char * remote_call = NULL;
-    char * param_list = NULL;
-    struct curl_response write_buffer;
+    struct curl_response write_buffer = {0};
+    CURLcode response                 = {0};
+    char * remote_call                = NULL;
+    char * param_list                 = NULL;
+    int malloc_size                   = 2;
 
-    malloc_size = 2;
-
-    param_list = ( char * ) malloc( sizeof( char ) * malloc_size );
+    param_list = ( char * ) calloc( malloc_size, sizeof( char ) );
 
     if( param_list == NULL )
     {
@@ -843,9 +844,9 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         return false;
     }
 
-    remote_call = ( char * ) malloc(
+    remote_call = ( char * ) calloc(
+        ( strlen( uri ) + strlen( param_list ) + 1 ),
         sizeof( char )
-      * ( strlen( uri ) + strlen( param_list ) + 1 )
     );
 
     if( remote_call == NULL )
@@ -955,11 +956,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             write_buffer.pointer
         );
 
-        if( write_buffer.pointer != NULL )
-        {
-            free( write_buffer.pointer );
-        }
-
+        free( write_buffer.pointer );
         free( remote_call );
         return true;
     }
@@ -1049,7 +1046,7 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
 
 bool execute_action( PGresult * result, int row )
 {
-    bool       execute_action_result;
+    bool   execute_action_result = false;
 
     char * parameters        = NULL;
     char * uid               = NULL;
@@ -1073,7 +1070,7 @@ bool execute_action( PGresult * result, int row )
 
     method            = get_column_value( row, result, "method" );
     query             = get_column_value( row, result, "query" );
-    
+
     if( is_column_null( 0, result, "query" ) == false )
     {
         _log(
@@ -1124,8 +1121,9 @@ bool execute_action( PGresult * result, int row )
 
 void _cyanaudit_integration( char * transaction_label )
 {
-    PGresult * cyanaudit_result;
-    char *     param[1];
+    PGresult * cyanaudit_result = NULL;
+    char *     param[1]         = {NULL};
+
     param[0] = transaction_label;
 
     cyanaudit_result = _execute_query(
@@ -1150,7 +1148,7 @@ void _cyanaudit_integration( char * transaction_label )
 
 bool _rollback_transaction( void )
 {
-    PGresult * result;
+    PGresult * result = NULL;
 
     result = PQexec(
         conn,
@@ -1196,7 +1194,7 @@ bool _commit_transaction( void )
 
 bool _begin_transaction( void )
 {
-    PGresult * result;
+    PGresult * result = NULL;
 
     result = PQexec(
         conn,
@@ -1219,11 +1217,12 @@ bool _begin_transaction( void )
 
 bool set_uid( char * uid )
 {
-    PGresult * uid_function_result;
-    struct query * set_uid_query_obj = NULL;
-    char *     params[1];
-    char *     uid_function_name;
-    char *     set_uid_query;
+    PGresult *     uid_function_result = NULL;
+    struct query * set_uid_query_obj   = NULL;
+
+    char * params[1]         = {NULL};
+    char * uid_function_name = NULL;
+    char * set_uid_query     = NULL;
 
     params[0] = SET_UID_GUC_NAME;
 
@@ -1261,9 +1260,9 @@ bool set_uid( char * uid )
         "uid_function"
     );
 
-    set_uid_query = ( char * ) malloc(
+    set_uid_query = ( char * ) calloc(
+        ( strlen( uid_function_name ) + 8 ),
         sizeof( char )
-      * ( strlen( uid_function_name ) + 8 )
     );
 
     if( set_uid_query == NULL )
@@ -1293,6 +1292,7 @@ bool set_uid( char * uid )
         return false;
     }
 
+    PQclear( uid_function_result );
     uid_function_result = _execute_query(
         set_uid_query_obj->query_string,
         set_uid_query_obj->_bind_list,
@@ -1316,11 +1316,41 @@ bool set_uid( char * uid )
     return true;
 }
 
+// Signal Handlers
+void __sigterm( int sig )
+{
+    _log(
+        LOG_LEVEL_ERROR,
+        "Got SIGTERM. Completing current transaction..."
+    );
+
+    free( conninfo );
+    if( enable_curl )
+    {
+        curl_easy_cleanup( curl_handle );
+        curl_global_cleanup();
+    }
+
+    if( conn != NULL )
+    {
+        PQfinish( conn );
+    }
+
+    exit( 1 );
+}
+
+void __sighup( int sig )
+{
+    got_sighup = true;
+    signal ( sig, __sighup );
+    return;
+}
+
 int main( int argc, char ** argv )
 {
-    PGresult * result;
-    PGresult * cyanaudit_result;
-    char *     params[1];
+    PGresult * result           = NULL;
+    PGresult * cyanaudit_result = NULL;
+    char *     params[1]        = {NULL};
 
     int random_ind = 4; // determined by dice roll
     int row_count  = 0;
@@ -1418,6 +1448,7 @@ int main( int argc, char ** argv )
         _queue_loop( EVENT_QUEUE_CHANNEL, &event_queue_handler );
     }
 
+    // We shouldn't get to this point, but just in case
     if( conn != NULL )
     {
         PQfinish( conn );
@@ -1428,6 +1459,7 @@ int main( int argc, char ** argv )
     if( enable_curl )
     {
         curl_easy_cleanup( curl_handle );
+        curl_global_cleanup();
     }
 
     return 0;

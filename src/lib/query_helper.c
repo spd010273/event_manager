@@ -20,35 +20,18 @@
 #include <math.h>
 
 #include "util.h"
-#include "jsmn/jsmn.h"
+#include "query_helper.h"
 
 #define MAX_REGEX_GROUPS 1
 #define MAX_REGEX_MATCHES 100
 
 #define JSON_TOKENS 16
 
-struct query {
-    char *  query_string;
-    int     length;
-    char ** _bind_list;
-    int     _bind_count;
-};
-
-struct query * _new_query( char * );
-struct query * _finalize_query( struct query * );
-struct query * _add_parameter_to_query( struct query *, char *, char * );
-struct query * _add_json_parameter_to_query( struct query *, char *, char * );
-jsmntok_t * json_tokenise( char *,int * );
-char * _add_json_parameters_to_param_list( char *, char *, int * );
-
-void _free_query( struct query * );
-void _debug_struct( struct query * );
-
 struct query * _new_query( char * query_string )
 {
     struct query * query_object = NULL;
 
-    query_object = ( struct query * ) malloc( sizeof( struct query ) );
+    query_object = ( struct query * ) calloc( 1, sizeof( struct query ) );
 
     if( query_object == NULL )
     {
@@ -61,9 +44,9 @@ struct query * _new_query( char * query_string )
 
     query_object->length = strlen( query_string );
 
-    query_object->query_string = ( char * ) malloc(
+    query_object->query_string = ( char * ) calloc(
+        ( query_object->length + 1 ),
         sizeof( char )
-      * ( query_object->length + 1 )
     );
 
     if( query_object->query_string == NULL )
@@ -86,14 +69,15 @@ struct query * _new_query( char * query_string )
 
 struct query * _finalize_query( struct query * query_object )
 {
-    regex_t regex;
-    regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char * temp_query = NULL;
-    int    reg_result = 0;
+    regmatch_t matches[MAX_REGEX_GROUPS + 1] = {{0}};
+    regex_t    regex                         = {0};
+    char *     temp_query                    = NULL;
+    int        reg_result                    = 0;
+    int        i                             = 0;
+
+    char * bind_search      = "[?][:word:]+[?]";
+    char * bind_replace     = "NULL";
     int    bindpoint_length = 0;
-    int    i = 0;
-    char * bind_search = "[?][:word:]+[?]";
-    char * bind_replace = "NULL";
 
     if( query_object == NULL )
     {
@@ -153,14 +137,14 @@ struct query * _finalize_query( struct query * query_object )
         }
 
         bindpoint_length = matches[0].rm_eo - matches[0].rm_so;
-        temp_query = ( char * ) malloc(
-            sizeof( char )
-          * (
+        temp_query = ( char * ) calloc(
+            (
                 strlen( query_object->query_string )
              - bindpoint_length
              + strlen( bind_replace )
              + 1
-            )
+            ),
+            sizeof( char )
         );
 
         if( temp_query == NULL )
@@ -194,16 +178,18 @@ struct query * _finalize_query( struct query * query_object )
         }
     }
 
+    regfree( &regex );
+    free( temp_query );
     return query_object;
 }
 
 struct query * _add_parameter_to_query( struct query * query_object, char * key, char * value )
 {
-    regex_t    regex;
-    regmatch_t matches[MAX_REGEX_GROUPS + 1];
-    char *     temp_query = NULL;
-    int        reg_result = 0;
-    int        i = 0;
+    regmatch_t matches[MAX_REGEX_GROUPS + 1] = {{0}};
+    regex_t    regex                         = {0};
+    char *     temp_query                    = NULL;
+    int        reg_result                    = 0;
+    int        i                             = 0;
 
     int    bind_length       = 0;
     int    bind_counter      = 0;
@@ -229,9 +215,9 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
         return NULL;
     }
 
-    bindpoint_search = ( char * ) malloc(
+    bindpoint_search = ( char * ) calloc(
+        ( strlen( key ) + 7 ),
         sizeof( char )
-      * ( strlen( key ) + 7 )
     );
 
     if( bindpoint_search == NULL )
@@ -261,9 +247,9 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
         return NULL;
     }
 
-    bindpoint_replace = ( char * ) malloc(
+    bindpoint_replace = ( char * ) calloc(
+        (int) ( floor( log10( abs( query_object->_bind_count + 1 ) ) ) + 3 ),
         sizeof( char )
-      * (int) ( floor( log10( abs( query_object->_bind_count + 1 ) ) ) + 3 )
     );
 
     if( bindpoint_replace == NULL )
@@ -310,14 +296,14 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
         bind_counter++;
 
         bind_length = matches[0].rm_eo - matches[0].rm_so;
-        temp_query = ( char * ) malloc(
-            sizeof( char )
-          * (
+        temp_query = ( char * ) calloc(
+            (
                 strlen( query_object->query_string )
               - bind_length
               + strlen( bindpoint_replace )
               + 1
-            )
+            ),
+            sizeof( char )
         );
 
         if( temp_query == NULL )
@@ -330,6 +316,7 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
             free( query_object );
             free( bindpoint_replace );
             regfree( &regex );
+            _free_query( query_object );
             return NULL;
         }
 
@@ -339,9 +326,9 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
 
         free( query_object->query_string );
 
-        query_object->query_string = ( char * ) malloc(
+        query_object->query_string = ( char * ) calloc(
+            ( strlen( temp_query ) + 1 ),
             sizeof( char )
-          * ( strlen( temp_query ) + 1 )
         );
 
         if( query_object->query_string == NULL )
@@ -371,7 +358,8 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
     {
         if( query_object->_bind_count == 0 )
         {
-            query_object->_bind_list = ( char ** ) malloc(
+            query_object->_bind_list = ( char ** ) calloc(
+                1,
                 sizeof( char * )
             );
         }
@@ -394,9 +382,9 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
             return NULL;
         }
 
-        query_object->_bind_list[query_object->_bind_count] = ( char * ) malloc(
+        query_object->_bind_list[query_object->_bind_count] = ( char * ) calloc(
+            ( strlen( value ) + 1 ),
             sizeof( char )
-          * ( strlen( value ) + 1 )
         );
         strcpy( query_object->_bind_list[query_object->_bind_count], value );
         query_object->_bind_count = query_object->_bind_count + 1;
@@ -407,17 +395,17 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
 
 struct query * _add_json_parameter_to_query( struct query * query_obj, char * json_string, char * key_prefix )
 {
-    int i = 0;
-    int j = 0;
-    int end_index = 0;
-    jsmntok_t * json_tokens = NULL;
-    jsmntok_t json_key_token;
-    jsmntok_t json_value_token;
-    jsmntok_t temp_token;
-    int max_tokens = 0;
-    char * key = NULL;
-    char * value = NULL;
-    int key_size_offset = 0;
+    jsmntok_t * json_tokens      = NULL;
+    jsmntok_t   json_key_token   = {0};
+    jsmntok_t   json_value_token = {0};
+    jsmntok_t   temp_token       = {0};
+    char *      key              = NULL;
+    char *      value            = NULL;
+    int         i                = 0;
+    int         j                = 0;
+    int         end_index        = 0;
+    int         max_tokens       = 0;
+    int         key_size_offset  = 0;
 
     if( json_string == NULL )
     {
@@ -455,6 +443,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             LOG_LEVEL_ERROR,
             "Failed to tokenise JSON string for binding to query"
         );
+        _free_query( query_obj );
         return NULL;
     }
 
@@ -466,6 +455,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             LOG_LEVEL_ERROR,
             "Root element of JSON response is not an object"
         );
+        _free_query( query_obj );
         return NULL;
     }
 
@@ -482,6 +472,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             json_string,
             max_tokens
         );
+        _free_query( query_obj );
         return NULL;
     }
 
@@ -506,12 +497,13 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
                 i
             );
             free( json_tokens );
+            _free_query( query_obj );
             return NULL;
         }
 
-        key = ( char * ) malloc(
+        key = ( char * ) calloc(
+            ( json_key_token.end - json_key_token.start + 1 + key_size_offset ),
             sizeof( char )
-          * ( json_key_token.end - json_key_token.start + 1 + key_size_offset )
         );
 
         if( key == NULL )
@@ -520,7 +512,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
                 LOG_LEVEL_ERROR,
                 "Failed to allocate memory for JSON key string"
             );
-
+            _free_query( query_obj );
             free( json_tokens );
             return NULL;
         }
@@ -548,14 +540,15 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             );
             free( key );
             free( json_tokens );
+            _free_query( query_obj );
             return NULL;
         }
 
         json_value_token = json_tokens[i];
 
-        value = ( char * ) malloc(
+        value = ( char * ) calloc(
+            ( json_value_token.end - json_value_token.start + 1 ),
             sizeof( char )
-          * ( json_value_token.end - json_value_token.start + 1 )
         );
 
         if( value == NULL )
@@ -564,7 +557,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
                 LOG_LEVEL_ERROR,
                 "Failed to allocate memory for JSON value string"
             );
-
+            _free_query( query_obj );
             free( json_tokens );
             free( key );
             return NULL;
@@ -666,20 +659,21 @@ void _free_query( struct query * query_object )
         free( query_object->_bind_list );
     }
 
+    free( query_object );
     return;
 }
 
 char * _add_json_parameters_to_param_list( char * param_list, char * json_string, int * malloc_size )
 {
-    jsmntok_t * json_tokens = NULL;
-    jsmntok_t json_key_token;
-    jsmntok_t json_value_token;
-    jsmntok_t temp_token;
-    int end_index = 0;
-    int j = 0;
-    int i = 0;
-    bool first_param_pass = true;
-    int max_tokens = 0;
+    jsmntok_t * json_tokens      = NULL;
+    jsmntok_t   json_key_token   = {0};
+    jsmntok_t   json_value_token = {0};
+    jsmntok_t   temp_token       = {0};
+    int         end_index        = 0;
+    int         j                = 0;
+    int         i                = 0;
+    int         max_tokens       = 0;
+    bool        first_param_pass = true;
 
     if( param_list == NULL )
     {
@@ -867,10 +861,10 @@ char * _add_json_parameters_to_param_list( char * param_list, char * json_string
 
 jsmntok_t * json_tokenise( char * json, int * token_count )
 {
-    jsmn_parser parser;
-    int jsmn_rc = 0;
-    jsmntok_t * tokens = NULL;
-    unsigned int n = JSON_TOKENS;
+    jsmn_parser  parser  = {0};
+    int          jsmn_rc = 0;
+    jsmntok_t *  tokens  = NULL;
+    unsigned int n       = JSON_TOKENS;
 
     jsmn_init( &parser );
 

@@ -17,16 +17,12 @@
 #include <string.h>
 #include <stdarg.h>
 #include <unistd.h>
-#include <signal.h>
 #include "util.h"
 
 #define VERSION 0.1
 
-sig_atomic_t got_sighup = false;
-sig_atomic_t got_sigterm = false;
-
 bool event_listener = false;
-bool work_listener = false;
+bool work_listener  = false;
 
 char * conninfo = NULL;
 
@@ -40,15 +36,10 @@ Usage: event_manager \
   [ -D debug mode \
     -v VERSION \
     -? HELP ]";
-void _parse_args( int, char ** );
-void _usage( char * ) __attribute__ ((noreturn));
-void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
-void __sigterm( int );
-void __sighup( int );
 
 void _parse_args( int argc, char ** argv )
 {
-    int    c;
+    int    c        = 0;
     char * username = NULL;
     char * dbname   = NULL;
     char * port     = NULL;
@@ -110,15 +101,15 @@ void _parse_args( int argc, char ** argv )
     if( dbname == NULL )
         dbname = username;
 
-    conninfo = ( char * ) malloc(
-        sizeof( char ) *
+    conninfo = ( char * ) calloc(
         (
             strlen( username ) +
             strlen( port ) +
             strlen( dbname ) +
             strlen( hostname ) +
             26
-        )
+        ),
+        sizeof( char )
     );
 
     strcpy( conninfo, "user=" );
@@ -153,8 +144,8 @@ void _usage( char * message )
 
 void _log( char * log_level, char * message, ... )
 {
-    va_list args;
-    FILE *  output_handle;
+    va_list args = {{0}};
+    FILE *  output_handle = NULL;
 
     if( message == NULL )
     {
@@ -210,30 +201,5 @@ void _log( char * log_level, char * message, ... )
         exit( 1 );
     }
 
-    return;
-}
-// Signal Handlers
-void __sigterm( int sig )
-{
-    _log(
-        LOG_LEVEL_ERROR,
-        "Got SIGTERM. Completing current transaction..."
-    );
-
-    if( got_sigterm == true )
-    {
-        free( conninfo );
-        exit( 1 );
-    }
-
-    got_sigterm = true;
-    signal ( sig, __sigterm );
-    return;
-}
-
-void __sighup( int sig )
-{
-    got_sighup = true;
-    signal ( sig, __sighup );
     return;
 }
