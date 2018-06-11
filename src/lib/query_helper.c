@@ -522,13 +522,13 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             strcpy( key, key_prefix );
         }
 
-        strncpy(
+        strncat(
             key,
             ( char * ) ( json_string + json_key_token.start ),
             json_key_token.end - json_key_token.start
         );
 
-        key[json_key_token.end - json_key_token.start] = '\0';
+        key[key_size_offset + json_key_token.end - json_key_token.start] = '\0';
 
         i++;
 
