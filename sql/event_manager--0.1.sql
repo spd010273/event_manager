@@ -75,10 +75,6 @@ CREATE TABLE @extschema@.tb_event_queue
     recorded                TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     pk_value                INTEGER NOT NULL,
     op                      CHAR(1),
---    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
---    transaction_label       VARCHAR,
---    work_item_query         TEXT,
---    action                  INTEGER,
     old                     JSONB,
     new                     JSONB,
     CHECK( (  op IN( 'D', 'U', 'I' ) ) )
@@ -149,7 +145,9 @@ CREATE OR REPLACE FUNCTION @extschema@.fn_dummy_when_function
 (
     in_event_table_work_item    INTEGER,
     in_pk_value                 INTEGER,
-    in_op                       CHAR(1)
+    in_op                       CHAR(1),
+    in_new                      JSONB,
+    in_old                      JSONB
 )
 RETURNS BOOLEAN AS
  $_$
@@ -277,11 +275,13 @@ BEGIN
                                    )
                          ) LOOP
         EXECUTE 'SELECT ' || my_when_function
-             || '( $1::INTEGER, $2::INTEGER, $3::CHAR(1) )::BOOLEAN'
+             || '( $1::INTEGER, $2::INTEGER, $3::CHAR(1) $4::JSONB, $5::JSONB )::BOOLEAN'
            INTO my_when_result
           USING my_event_table_work_item,
                 my_pk_value,
-                substr( TG_OP, 1, 1 ); -- Get either 'U', 'I', or 'D'
+                substr( TG_OP, 1, 1 ), -- Get either 'U', 'I', or 'D'
+                new_record,
+                old_record;
 
         IF( my_when_result IS TRUE ) THEN
             INSERT INTO @extschema@.tb_event_queue

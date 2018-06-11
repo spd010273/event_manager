@@ -73,7 +73,9 @@ CREATE FUNCTION my_when_function
 (
     in_event_table_work_item    INTEGER,
     in_pk_value                 INTEGER,
-    in_op                       CHAR(1)
+    in_op                       CHAR(1),
+    in_new                      JSONB,
+    in_old                      JSONB
 )
 RETURNS BOOLEAN AS
  $_$
