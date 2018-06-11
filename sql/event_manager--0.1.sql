@@ -663,3 +663,10 @@ CREATE TRIGGER tr_event_table_triggering_sanity_check
     AFTER INSERT OR UPDATE OF source_event_table ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_work_item_reference();
 
+GRANT ALL ON @extschema@.tb_event_queue TO public;
+GRANT ALL ON @extschema@.tb_work_queue TO public;
+GRANT SELECT ON @extschema@.tb_event_table_work_item TO public;
+GRANT SELECT ON @extschema@.tb_action TO public;
+GRANT SELECT ON @extschema@.tb_setting TO public;
+GRANT SELECT ON @extschema@.tb_event_table TO public;
+GRANT ALL ON @extschema@.tb_event_table_work_item_instance TO public;
