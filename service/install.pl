@@ -33,6 +33,8 @@ Readonly my $stop_file_name => 'event_manager-shutdown.sh';
 Readonly my $sh_target_dir => '/usr/bin/';
 Readonly my $systemd_service_dir => '/usr/lib/systemd/system/';
 
+Readonly my $git_init_command => 'git submodule update --init --recursive';
+
 my $hostname;
 my $username;
 my $port;
@@ -50,6 +52,17 @@ sub get_user_input($)
     chomp( $response );
 
     return $response;
+}
+
+sub build_repo()
+{
+    # It's expected we're in the event_manager root
+    system( $git_init_command );
+    #TODO:
+    #  - Check for lib prerequisites
+    system( 'make clean' );
+    system( 'make' ); 
+    return;
 }
 
 sub test_connection()
@@ -111,6 +124,8 @@ if( $dir =~ /\/service/ )
 {
     chdir( '../' );
 }
+
+build_repo();
 
 my $install_dir = getcwd();
 chdir( $dir );
