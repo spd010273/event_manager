@@ -176,10 +176,11 @@ BEGIN
         AND a.attname = 'parameters';
 
     IF NOT FOUND THEN
+        DROP TABLE IF EXISTS tt_work_item_test;
         RAISE EXCEPTION 'work_item_query does not return a ''parameters'' JSONB column';
     END IF;
 
-    DROP TABLE IF EXISTS @extschema@.tt_work_item_test;
+    DROP TABLE IF EXISTS tt_work_item_test;
     RETURN NEW;
 END
  $_$
@@ -225,10 +226,6 @@ DECLARE
     new_record                  JSONB;
     old_record                  JSONB;
     my_uid                      INTEGER;
---    my_transaction_label        VARCHAR;
---    my_action                   INTEGER;
---    my_execute_asynchronously   BOOLEAN;
---    my_work_item_query          VARCHAR;
     my_event_table_work_item    INTEGER;
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
@@ -265,17 +262,9 @@ BEGIN
        INTO my_uid;
 
     FOR my_when_function,
---        my_transaction_label,
---        my_action,
---        my_execute_asynchronously,
---        my_work_item_query,
         my_event_table_work_item
                         IN(
                             SELECT etwi.when_function,
---                                   transaction_label,
---                                   action,
---                                   execute_asynchronously,
---                                   work_item_query,
                                    etwi.event_table_work_item
                               FROM @extschema@.tb_event_table_work_item etwi
                         INNER JOIN @extschema@.tb_event_table et
@@ -302,10 +291,6 @@ BEGIN
                             recorded,
                             pk_value,
                             op,
---                            execute_asynchronously,
---                            transaction_label,
---                            work_item_query,
---                            action,
                             old,
                             new
                         )
@@ -316,10 +301,6 @@ BEGIN
                             now(),
                             my_pk_value,
                             substr( TG_OP, 1, 1 ),
---                            my_execute_asynchronously,
---                            my_transaction_label,
---                            my_work_item_query,
---                            my_action,
                             old_record,
                             new_record
                         );
@@ -462,7 +443,7 @@ BEGIN
                                        value
                                   FROM jsonb_each_text( NEW.new )
                            ) LOOP
-        my_query := regexp_replace( my_query, '\?' || my_key || '\?', my_value, 'g' );
+        my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
 
     -- Replace any remaining bindpoints with NULL
@@ -495,10 +476,6 @@ BEGIN
             AND eq.recorded IS NOT DISTINCT FROM NEW.recorded
             AND eq.pk_value IS NOT DISTINCT FROM NEW.pk_value
             AND eq.op IS NOT DISTINCT FROM NEW.op
---            AND eq.execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously
---            AND eq.work_item_query IS NOT DISTINCT FROM NEW.work_item_query
---            AND eq.transaction_label IS NOT DISTINCT FROM NEW.transaction_label
---            AND eq.action IS NOT DISTINCT FROM NEW.action
             AND eq.old::VARCHAR IS NOT DISTINCT FROM NEW.old::VARCHAR
             AND eq.new::VARCHAR IS NOT DISTINCT FROM NEW.new::VARCHAR;
 
@@ -670,3 +647,4 @@ GRANT SELECT ON @extschema@.tb_action TO public;
 GRANT SELECT ON @extschema@.tb_setting TO public;
 GRANT SELECT ON @extschema@.tb_event_table TO public;
 GRANT ALL ON @extschema@.tb_event_table_work_item_instance TO public;
+GRANT USAGE ON SCHEMA @extschema@ TO public;
