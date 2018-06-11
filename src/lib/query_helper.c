@@ -382,11 +382,19 @@ struct query * _add_parameter_to_query( struct query * query_object, char * key,
             return NULL;
         }
 
-        query_object->_bind_list[query_object->_bind_count] = ( char * ) calloc(
-            ( strlen( value ) + 1 ),
-            sizeof( char )
-        );
-        strcpy( query_object->_bind_list[query_object->_bind_count], value );
+        if( value == NULL )
+        {
+            query_object->_bind_list[query_object->_bind_count] = NULL;
+        }
+        else
+        {
+            query_object->_bind_list[query_object->_bind_count] = ( char * ) calloc(
+                ( strlen( value ) + 1 ),
+                sizeof( char )
+            );
+            strcpy( query_object->_bind_list[query_object->_bind_count], value );
+        }
+
         query_object->_bind_count = query_object->_bind_count + 1;
     }
 
@@ -591,6 +599,12 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             i = max_tokens;
         }
 
+        if( strcmp( value, "null" ) == 0 || strcmp( value, "NULL" ) == 0 )
+        {
+            free( value );
+            value = NULL;
+        }
+
         query_obj = _add_parameter_to_query(
             query_obj,
             key,
@@ -599,7 +613,11 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
 
         _log( LOG_LEVEL_DEBUG, "Potentially bound KV: %s,%s", key, value );
         free( key );
-        free( value );
+
+        if( value != NULL )
+        {
+            free( value );
+        }
 
         if( i >=  ( max_tokens - 1 ) )
         {
