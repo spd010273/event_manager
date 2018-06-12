@@ -429,9 +429,9 @@ BEGIN
       INTO my_uid;
 
     my_query := regexp_replace( my_query, '\?pk_value\?', NEW.pk_value::VARCHAR, 'g' );
-    my_query := regexp_replace( my_query, '\?recorded\?', NEW.recorded::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?recorded\?', quote_nullable( NEW.recorded::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?uid\?', quote_nullable( NEW.uid::VARCHAR ), 'g' );
-    my_query := regexp_replace( my_query, '\?op\?', NEW.op::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?op\?', quote_nullable( NEW.op::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?event_table_work_item\?', NEW.event_table_work_item::VARCHAR, 'g' );
 
     FOR my_key, my_value IN(
@@ -479,7 +479,7 @@ BEGIN
             AND eq.old::VARCHAR IS NOT DISTINCT FROM NEW.old::VARCHAR
             AND eq.new::VARCHAR IS NOT DISTINCT FROM NEW.new::VARCHAR;
 
-    RETURN NULL;
+    RETURN NEW;
 END
  $_$
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
@@ -500,10 +500,13 @@ DECLARE
 BEGIN
     my_is_async := TRUE;
 
-    SELECT CASE WHEN lower( value ) LIKE '%t%'
-                THEN TRUE
-                ELSE FALSE
-                 END AS is_async
+    SELECT COALESCE(
+               NEW.execute_asynchronously,
+               CASE WHEN lower( value ) LIKE '%t%'
+                    THEN TRUE
+                    ELSE FALSE
+                     END
+           ) AS is_async
       INTO my_is_async
       FROM @extschema@.tb_setting
      WHERE key = '@extschema@.execute_asynchronously';
@@ -536,7 +539,7 @@ BEGIN
                 'NULL'
             );
 
-    my_query := regexp_replace( my_query, '\?recorded\?', NEW.recorded::VARCHAR, 'g' );
+    my_query := regexp_replace( my_query, '\?recorded\?', quote_nullable( NEW.recorded::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?uid\?', quote_nullable( NEW.uid::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?transaction_label\?', quote_nullable( NEW.transaction_label::VARCHAR ), 'g' );
 
