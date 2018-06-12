@@ -73,9 +73,9 @@ struct curl_response {
 /* Function Prototypes */
 
 // Main functions
-void _queue_loop( const char *, void (*)(void) );
-void work_queue_handler( void );
-void event_queue_handler( void );
+void _queue_loop( const char *, int (*)(void) );
+int work_queue_handler( void );
+int event_queue_handler( void );
 bool execute_action( PGresult *, int );
 bool execute_action_query( char *, char *, char *, char *, char *, char * );
 bool execute_remote_uri_call( char *, char *, char *, char * );
@@ -165,7 +165,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count, bool t
         );
 
         retry_counter++;
-        last_backoff_time = (int) ( rand() / 1000 ) + last_backoff_time;
+        last_backoff_time = (int) ( 10 * (rand() / RAND_MAX) ) + last_backoff_time;
 
         if( conn != NULL )
         {
@@ -258,11 +258,12 @@ PGresult * _execute_query( char * query, char ** params, int param_count, bool t
     return NULL;
 }
 
-void _queue_loop( const char * channel, void (*dequeue_function)(void) )
+void _queue_loop( const char * channel, int (*dequeue_function)(void) )
 {
-    PGnotify * notify         = NULL;
-    char *     listen_command = NULL;
-    PGresult * listen_result  = NULL;
+    PGnotify * notify          = NULL;
+    char *     listen_command  = NULL;
+    PGresult * listen_result   = NULL;
+    int        processed_count = 0;
 
     listen_command = ( char * ) calloc(
         ( strlen( channel ) + 10 ),
@@ -367,7 +368,17 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
 
             // Get queue item
             PQfreemem( notify );
-            (*dequeue_function)();
+            while( (*dequeue_function)() > 0 )
+            {
+                processed_count++;
+            }
+            
+            _log(
+                LOG_LEVEL_INFO,
+                "Processed %d queue entries",
+                processed_count
+            );
+            processed_count = 0;
         }
 
         if( got_sigterm )
@@ -388,7 +399,7 @@ void _queue_loop( const char * channel, void (*dequeue_function)(void) )
  *  dequeues and executes arbitrary queries
  */
 
-void event_queue_handler( void )
+int event_queue_handler( void )
 {
     PGresult * result           = NULL;
     PGresult * work_item_result = NULL;
@@ -424,7 +435,7 @@ void event_queue_handler( void )
             "Failed to start event dequeue transaction"
         );
 
-        return;
+        return 0;
     }
 
     result = _execute_query(
@@ -443,7 +454,7 @@ void event_queue_handler( void )
 
         _rollback_transaction();
 
-        return;
+        return 0;
     }
 
     if( PQntuples( result ) <= 0 )
@@ -456,7 +467,7 @@ void event_queue_handler( void )
         _rollback_transaction();
         PQclear( result );
 
-        return;
+        return 0;
     }
 
     transaction_label      = get_column_value( 0, result, "transaction_label" );
@@ -527,7 +538,7 @@ void event_queue_handler( void )
         );
         _rollback_transaction();
         PQclear( result );
-        return;
+        return 0;
     }
 
     _log( LOG_LEVEL_DEBUG, "WORK ITEM QUERY: " );
@@ -550,7 +561,7 @@ void event_queue_handler( void )
 
         PQclear( result );
         _rollback_transaction();
-        return;
+        return 0;
     }
 
     params[1] = uid;
@@ -580,7 +591,7 @@ void event_queue_handler( void )
 
             PQclear( result );
             _rollback_transaction();
-            return;
+            return 0;
         }
 
         PQclear( insert_result );
@@ -613,22 +624,25 @@ void event_queue_handler( void )
             "Failed to dequeue event queue item"
         );
         _rollback_transaction();
-        return;
+        return 0;
     }
 
     PQclear( delete_result );
     if( _commit_transaction() == false )
     {
+        // Lets just hope the tx entered an aborted state
         _log(
             LOG_LEVEL_ERROR,
             "Failed to commit event queue transaction"
         );
+        
+        return 0;
     }
 
-    return;
+    return 1;
 }
 
-void work_queue_handler( void )
+int work_queue_handler( void )
 {
     PGresult * result        = NULL;
     PGresult * delete_result = NULL;
@@ -646,7 +660,11 @@ void work_queue_handler( void )
     /* Start transaction */
     if( !_begin_transaction() )
     {
-        return;
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to start transaction"
+        );
+        return 0;
     }
 
     result = _execute_query(
@@ -664,7 +682,7 @@ void work_queue_handler( void )
         );
 
         _rollback_transaction();
-        return;
+        return 0;
     }
 
     /* Handle action execution */
@@ -678,7 +696,7 @@ void work_queue_handler( void )
         );
         _rollback_transaction();
         PQclear( result );
-        return;
+        return 0;
     }
 
     for( i = 0; i < row_count; i++ )
@@ -702,7 +720,7 @@ void work_queue_handler( void )
         {
             PQclear( result );
             _rollback_transaction();
-            return;
+            return 0;
         }
 
         /* Flush queue item */
@@ -722,7 +740,7 @@ void work_queue_handler( void )
 
             PQclear( result );
             _rollback_transaction();
-            return;
+            return 0;
         }
 
         PQclear( delete_result );
@@ -741,7 +759,7 @@ void work_queue_handler( void )
         _rollback_transaction();
     }
 
-    return;
+    return 1;
 }
 
 char * get_column_value( int row, PGresult * result, char * column_name )
