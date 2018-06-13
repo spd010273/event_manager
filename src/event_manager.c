@@ -372,7 +372,7 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
             {
                 processed_count++;
             }
-            
+
             _log(
                 LOG_LEVEL_INFO,
                 "Processed %d queue entries",
@@ -635,7 +635,7 @@ int event_queue_handler( void )
             LOG_LEVEL_ERROR,
             "Failed to commit event queue transaction"
         );
-        
+
         return 0;
     }
 
@@ -848,10 +848,28 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         return false;
     }
 
-    strcpy( param_list, "?" );
+    if( strcmp( method, "GET" ) == 0 )
+    {
+        strcpy( param_list, "?" );
+    }
 
-    param_list = _add_json_parameters_to_param_list( param_list, parameters, &malloc_size );
-    param_list = _add_json_parameters_to_param_list( param_list, static_parameters, &malloc_size );
+    param_list = _add_json_parameters_to_param_list( curl_handle, param_list, parameters, &malloc_size );
+    malloc_size++;
+
+    param_list = ( char * ) realloc( param_list, malloc_size );
+
+    if( param_list == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Unable to allocate memory for simple string concatenation operation :("
+        );
+        return false;
+    }
+
+    strcat( param_list, "&" );
+
+    param_list = _add_json_parameters_to_param_list( curl_handle, param_list, static_parameters, &malloc_size );
 
     if( param_list == NULL )
     {
@@ -861,31 +879,6 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         );
         return false;
     }
-
-    remote_call = ( char * ) calloc(
-        ( strlen( uri ) + strlen( param_list ) + 1 ),
-        sizeof( char )
-    );
-
-    if( remote_call == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Unable to prep final remote call string"
-        );
-        free( param_list );
-        return false;
-    }
-
-    strcpy( remote_call, uri );
-    strcat( remote_call, param_list );
-    free( param_list );
-
-    _log(
-        LOG_LEVEL_DEBUG,
-        "Making remote call to URI: %s",
-        remote_call
-    );
 
     if( enable_curl )
     {
@@ -933,7 +926,45 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         write_buffer.pointer = malloc( 1 );
         write_buffer.size = 0;
 
-        _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
+        if( strcmp( method, "GET" ) == 0 )
+        {
+            _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
+            remote_call = ( char * ) calloc(
+                ( strlen( uri ) + strlen( param_list ) + 1 ),
+                sizeof( char )
+            );
+
+            if( remote_call == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Unable to prep final remote call string"
+                );
+                free( param_list );
+                free( write_buffer.pointer );
+                return false;
+            }
+
+            strcpy( remote_call, uri );
+            strcat( remote_call, param_list );
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Making remote call to URI: %s",
+                remote_call
+            );
+        }
+        else
+        {
+            // Set post fields for PUT / POST
+            remote_call = uri;
+            curl_easy_setopt(
+                curl_handle,
+                CURLOPT_POSTFIELDS,
+                param_list
+            );
+        }
+
         response = curl_easy_setopt( curl_handle, CURLOPT_URL, remote_call );
         _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
         response = curl_easy_setopt(
@@ -950,8 +981,16 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
 
         if( response == CURLE_OK )
         {
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Making %s call with param list %s",
+                method,
+                param_list
+            );
             response = curl_easy_perform( curl_handle );
         }
+
+        free( param_list );
 
         if( response != CURLE_OK )
         {
@@ -975,7 +1014,12 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         );
 
         free( write_buffer.pointer );
-        free( remote_call );
+
+        if( strcmp( method, "GET" ) == 0 )
+        {
+            free( remote_call );
+        }
+
         return true;
     }
     else
@@ -986,11 +1030,19 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             remote_call
         );
 
-        free( remote_call );
+        if( strcmp( method, "GET" ) == 0 )
+        {
+            free( remote_call );
+        }
+
         return false;
     }
 
-    free( remote_call );
+    if( strcmp( method, "GET" ) == 0 )
+    {
+        free( remote_call );
+    }
+
     return true;
 }
 

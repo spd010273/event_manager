@@ -13,6 +13,7 @@
 
 #ifndef QUERY_HELPER_H
 #define QUERY_HELPER_H
+#include <curl/curl.h>
 #include "jsmn/jsmn.h"
 struct query {
     char *  query_string;
@@ -28,6 +29,6 @@ struct query * _add_json_parameter_to_query( struct query *, char *, char * );
 void _free_query( struct query * );
 void _debug_struct( struct query * );
 jsmntok_t * json_tokenise( char *, int * );
-char * _add_json_parameters_to_param_list( char *, char *, int * );
+char * _add_json_parameters_to_param_list( CURL *, char *, char *, int * );
 
 #endif

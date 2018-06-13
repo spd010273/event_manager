@@ -18,6 +18,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <math.h>
+#include <curl/curl.h>
 
 #include "util.h"
 #include "query_helper.h"
@@ -536,7 +537,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             json_key_token.end - json_key_token.start
         );
 
-        key[key_size_offset + json_key_token.end - json_key_token.start] = '\0';
+        key[key_size_offset + json_key_token.end - json_key_token.start - 1] = '\0';
 
         i++;
 
@@ -577,7 +578,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             json_value_token.end - json_value_token.start
         );
 
-        value[json_value_token.end - json_value_token.start] = '\0';
+        value[json_value_token.end - json_value_token.start - 1] = '\0';
 
         if( json_value_token.type == JSMN_OBJECT || json_value_token.type == JSMN_ARRAY )
         {
@@ -681,7 +682,7 @@ void _free_query( struct query * query_object )
     return;
 }
 
-char * _add_json_parameters_to_param_list( char * param_list, char * json_string, int * malloc_size )
+char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list, char * json_string, int * malloc_size )
 {
     jsmntok_t * json_tokens      = NULL;
     jsmntok_t   json_key_token   = {0};
@@ -692,6 +693,7 @@ char * _add_json_parameters_to_param_list( char * param_list, char * json_string
     int         i                = 0;
     int         max_tokens       = 0;
     bool        first_param_pass = true;
+    char      * encoded_value    = NULL;
 
     if( param_list == NULL )
     {
@@ -768,7 +770,7 @@ char * _add_json_parameters_to_param_list( char * param_list, char * json_string
             return NULL;
         }
 
-        *malloc_size = *malloc_size + json_key_token.end - json_key_token.start + 1;
+        *malloc_size = *malloc_size + json_key_token.end - json_key_token.start + 2;
 
         if( first_param_pass == true )
         {
@@ -797,14 +799,14 @@ char * _add_json_parameters_to_param_list( char * param_list, char * json_string
 
         first_param_pass = false;
 
-        strncpy(
+        strncat(
             param_list,
             ( char * ) ( json_string + json_key_token.start ),
             json_key_token.end - json_key_token.start
         );
 
-        param_list[*malloc_size] = '\0';
-
+        param_list[*malloc_size - 1] = '\0';
+        _log( LOG_LEVEL_DEBUG, "PARAM LIST: '%s' (%d)", param_list, *malloc_size );
         i++;
 
         if( i >= ( max_tokens ) )
@@ -820,7 +822,44 @@ char * _add_json_parameters_to_param_list( char * param_list, char * json_string
 
         json_value_token = json_tokens[i];
 
-        *malloc_size = *malloc_size + json_value_token.end - json_key_token.start + 1;
+        encoded_value = calloc(
+            json_value_token.end - json_value_token.start + 1,
+            sizeof( char )
+        );
+
+        if( encoded_value == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for URL encoding operation"
+            );
+            free( json_tokens );
+            return NULL;
+        }
+
+        strncpy(
+            encoded_value,
+            ( char * ) ( json_string + json_value_token.start ),
+            json_value_token.end - json_value_token.start
+        );
+
+        encoded_value[json_value_token.end - json_value_token.start] = '\0';
+        encoded_value = curl_easy_escape(
+            curl_handle,
+            ( const char * ) encoded_value,
+            strlen( encoded_value )
+        );
+
+        if( encoded_value == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "URL Encoding operation failed"
+            );
+            free( json_tokens );
+            return NULL;
+        }
+        *malloc_size = *malloc_size + strlen( encoded_value ) + 2;
         param_list = ( char * ) realloc(
             ( char * ) param_list,
             *malloc_size
@@ -833,17 +872,19 @@ char * _add_json_parameters_to_param_list( char * param_list, char * json_string
                 "Failed to reallocate memory for parameter string value"
             );
             free( json_tokens );
+            curl_free( encoded_value );
             return NULL;
         }
 
         strcat( param_list, "=" );
-        strncpy(
+
+        strcat(
             param_list,
-            ( char * ) ( json_string + json_value_token.start ),
-            json_value_token.end - json_value_token.start
+            encoded_value
         );
 
-        param_list[*malloc_size] = '\0';
+        curl_free( encoded_value );
+        param_list[*malloc_size - 1] = '\0';
 
         if( json_value_token.type == JSMN_OBJECT || json_value_token.type == JSMN_ARRAY )
         {
