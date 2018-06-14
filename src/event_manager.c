@@ -1081,6 +1081,8 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
     _log( LOG_LEVEL_DEBUG, "PARAMS: %s", parameters );
     action_query = _add_json_parameter_to_query( action_query, parameters, ( char * ) NULL );
     action_query = _add_json_parameter_to_query( action_query, static_parameters, ( char * ) NULL );
+    action_query = _finalize_query( action_query );
+
     // Set UID
     set_uid( uid );
 

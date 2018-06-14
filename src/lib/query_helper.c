@@ -537,7 +537,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             json_key_token.end - json_key_token.start
         );
 
-        key[key_size_offset + json_key_token.end - json_key_token.start - 1] = '\0';
+        key[key_size_offset + json_key_token.end - json_key_token.start] = '\0';
 
         i++;
 
@@ -578,7 +578,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             json_value_token.end - json_value_token.start
         );
 
-        value[json_value_token.end - json_value_token.start - 1] = '\0';
+        value[json_value_token.end - json_value_token.start] = '\0';
 
         if( json_value_token.type == JSMN_OBJECT || json_value_token.type == JSMN_ARRAY )
         {
