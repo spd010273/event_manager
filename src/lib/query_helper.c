@@ -694,6 +694,7 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
     int         max_tokens       = 0;
     bool        first_param_pass = true;
     char      * encoded_value    = NULL;
+    char      * value            = NULL;
 
     if( param_list == NULL )
     {
@@ -822,12 +823,12 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
 
         json_value_token = json_tokens[i];
 
-        encoded_value = calloc(
+        value = calloc(
             json_value_token.end - json_value_token.start + 1,
             sizeof( char )
         );
 
-        if( encoded_value == NULL )
+        if( value == NULL )
         {
             _log(
                 LOG_LEVEL_ERROR,
@@ -838,17 +839,19 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
         }
 
         strncpy(
-            encoded_value,
+            value,
             ( char * ) ( json_string + json_value_token.start ),
             json_value_token.end - json_value_token.start
         );
 
-        encoded_value[json_value_token.end - json_value_token.start] = '\0';
+        value[json_value_token.end - json_value_token.start] = '\0';
         encoded_value = curl_easy_escape(
             curl_handle,
-            ( const char * ) encoded_value,
-            strlen( encoded_value )
+            ( const char * ) value,
+            strlen( value )
         );
+
+        free( value );
 
         if( encoded_value == NULL )
         {
@@ -859,6 +862,7 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
             free( json_tokens );
             return NULL;
         }
+
         *malloc_size = *malloc_size + strlen( encoded_value ) + 2;
         param_list = ( char * ) realloc(
             ( char * ) param_list,
