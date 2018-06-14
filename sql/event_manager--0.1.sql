@@ -34,7 +34,7 @@ CREATE TABLE @extschema@.tb_action
     static_parameters   JSONB,
     use_ssl             BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK( uri IS NOT NULL OR query IS NOT NULL ),
-    CHECK( ( method IS NULL OR method IN( 'PUT', 'POST', 'GET' ) ) ),
+    CHECK( ( method IS NULL OR method IN( 'PUT', 'POST', 'GET' ) ) )
 );
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;
@@ -276,7 +276,7 @@ BEGIN
                                    )
                          ) LOOP
         EXECUTE 'SELECT ' || my_when_function
-             || '( $1::INTEGER, $2::INTEGER, $3::CHAR(1) $4::JSONB, $5::JSONB )::BOOLEAN'
+             || '( $1::INTEGER, $2::INTEGER, $3::CHAR(1), $4::JSONB, $5::JSONB )::BOOLEAN'
            INTO my_when_result
           USING my_event_table_work_item,
                 my_pk_value,
