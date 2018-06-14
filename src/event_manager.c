@@ -78,7 +78,7 @@ int work_queue_handler( void );
 int event_queue_handler( void );
 bool execute_action( PGresult *, int );
 bool execute_action_query( char *, char *, char *, char *, char *, char * );
-bool execute_remote_uri_call( char *, char *, char *, char * );
+bool execute_remote_uri_call( char *, char *, char *, char *, bool );
 bool set_uid( char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
@@ -690,10 +690,6 @@ int work_queue_handler( void )
 
     if( row_count == 0 )
     {
-        _log(
-            LOG_LEVEL_INFO,
-            "Work queue processor received spurious NOTIFY"
-        );
         _rollback_transaction();
         PQclear( result );
         return 0;
@@ -828,7 +824,7 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
     return real_size;
 }
 
-bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters )
+bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters, bool use_ssl )
 {
     struct curl_response write_buffer = {0};
     CURLcode response                 = {0};
@@ -965,7 +961,21 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             );
         }
 
-        response = curl_easy_setopt( curl_handle, CURLOPT_URL, remote_call );
+        if( use_ssl )
+        {
+            response = curl_easy_setopt(
+                curl_handle,
+                CURLOPT_USE_SSL,
+                CURLUSESSL_TRY
+            );
+        }
+
+        response = curl_easy_setopt(
+            curl_handle,
+            CURLOPT_URL,
+            remote_call
+        );
+
         _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
         response = curl_easy_setopt(
             curl_handle,
@@ -1003,7 +1013,10 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             );
 
             free( write_buffer.pointer );
-            free( remote_call );
+            if( strcmp( method, "GET" ) == 0 )
+            {
+                free( remote_call );
+            }
             return false;
         }
 
@@ -1126,6 +1139,8 @@ bool execute_action( PGresult * result, int row )
     char * static_parameters = NULL;
     char * uri               = NULL;
     char * query             = NULL;
+    char * use_ssl           = NULL;
+    bool usessl              = false;
 
     parameters        = get_column_value( row, result, "parameters" );
     uid               = get_column_value( row, result, "uid" );
@@ -1140,6 +1155,12 @@ bool execute_action( PGresult * result, int row )
 
     method            = get_column_value( row, result, "method" );
     query             = get_column_value( row, result, "query" );
+    use_ssl            = get_column_value( row, result, "use_ssl" );
+
+    if( strcmp( use_ssl, "t" ) == 0 || strcmp( use_ssl, "T" ) == 0 )
+    {
+        usessl = true;
+    }
 
     if( is_column_null( 0, result, "query" ) == false )
     {
@@ -1173,7 +1194,8 @@ bool execute_action( PGresult * result, int row )
             uri,
             static_parameters,
             method,
-            parameters
+            parameters,
+            usessl
         );
     }
     else

@@ -32,8 +32,9 @@ CREATE TABLE @extschema@.tb_action
     uri                 VARCHAR,
     method              VARCHAR(4),
     static_parameters   JSONB,
+    use_ssl             BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK( uri IS NOT NULL OR query IS NOT NULL ),
-    CHECK( ( method IN( 'PUT', 'POST', 'GET' ) ) )
+    CHECK( ( method IS NULL OR method IN( 'PUT', 'POST', 'GET' ) ) ),
 );
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;

@@ -65,6 +65,7 @@ static const char * get_work_queue_item = "\
            a.uri, \
            COALESCE( a.method, 'GET' ) AS method, \
            a.query, \
+           a.use_ssl, \
            wq.uid, \
            wq.recorded, \
            wq.transaction_label, \
