@@ -137,10 +137,13 @@ CREATE TABLE @extschema@.tb_event_table_work_item_instance
 (
     event_table_work_item_instance INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item_instance'),
     event_table_work_item   INTEGER NOT NULL REFERENCES @extschema@.tb_event_table_work_item,
-    target_pk               INTEGER NOT NULL
+    source_pk               INTEGER,
+    target_pk               INTEGER NOT NULL,
+    metadata                JSONB
 );
 
-COMMENT ON TABLE @extschema@.tb_event_table_work_item_instance IS 'Can be used to aid work item queries or action queries when the scope of an action query is non-deterministic or too broad.';
+COMMENT ON TABLE @extschema@.tb_event_table_work_item_instance IS 'Can be used to aid work item queries or action queries when the scope of an action query is non-deterministic or too broad. This table is intended for use by any integrating application, but is not required';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item_instance.metadata IS 'Can be used to store static parameters for an instance of a event_table_work_item';
 
 CREATE OR REPLACE FUNCTION @extschema@.fn_dummy_when_function
 (
