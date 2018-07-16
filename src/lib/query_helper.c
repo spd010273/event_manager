@@ -76,7 +76,7 @@ struct query * _finalize_query( struct query * query_object )
     int        reg_result                    = 0;
     int        i                             = 0;
 
-    char * bind_search      = "[?][:word:]+[?]";
+    char * bind_search      = "[?](((OLD)|(NEW))[[:punct:]])?[[:alpha:]_]+[?]";
     char * bind_replace     = "NULL";
     int    bindpoint_length = 0;
 
@@ -105,7 +105,7 @@ struct query * _finalize_query( struct query * query_object )
     {
         _log(
             LOG_LEVEL_ERROR,
-            "Failed to compile regular expression"
+            "Failed to compile regular expression (_finalize_query)"
         );
 
         _free_query( query_object );
@@ -162,7 +162,7 @@ struct query * _finalize_query( struct query * query_object )
         strncpy( temp_query, query_object->query_string, matches[0].rm_so );
         strcat( temp_query, bind_replace );
         strcat( temp_query, ( char * ) ( query_object->query_string + matches[0].rm_eo ) );
-
+        _log( LOG_LEVEL_DEBUG, "________-QUERY______  %s", temp_query );
         query_object->query_string = ( char * ) realloc(
             ( void * ) query_object->query_string,
             strlen( temp_query ) + 1
@@ -176,11 +176,14 @@ struct query * _finalize_query( struct query * query_object )
             );
             free( temp_query );
             regfree( &regex );
+            return NULL;
         }
+
+        strcpy( query_object->query_string, temp_query );
+        free( temp_query );
     }
 
     regfree( &regex );
-    free( temp_query );
     return query_object;
 }
 
