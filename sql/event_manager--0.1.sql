@@ -1,3 +1,29 @@
+/*-----------------------------------------------------------------------------
+ *
+ * event_manager--0.1.sql
+ *     Event Manager extension schema
+ *
+ * Copyright (c) 2018, Nead Werx, Inc.
+ *
+ * IDENTIFICATION
+ *        event_manager--0.1.sql
+ *
+ *-----------------------------------------------------------------------------
+ */
+
+/*
+ *   Note to user, this extension is configurable,
+ *     within the head of this file, there are GUCs that can be set prior
+ *     to installation that changes the behavior of this extension. These are
+ *     enumerated below:
+ *
+ *     @extschema@.unlogged_queue: TRUE/FALSE - when true, creates queue tables as UNLOGGED, speeding up DML to these tables.
+ *                                 The queues lose crash safety when this is TRUE, and will be truncated on crash recovery.
+ *                                 Additionally, the queues will NOT be replicated when set to TRUE
+ *     @extschema@.
+ *
+ */
+
 /* Version Check */
 DO
  $$
@@ -8,6 +34,8 @@ BEGIN
 END
  $$
     LANGUAGE 'plpgsql';
+
+SET @extschema@.unlogged_queue = 'FALSE';
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table;
 CREATE TABLE @extschema@.tb_event_table
@@ -42,6 +70,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
 (
     event_table_work_item   INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item'),
     source_event_table      INTEGER NOT NULL REFERENCES @extschema@.tb_event_table,
+    source_column_name      VARCHAR(63),
     target_event_table      INTEGER REFERENCES @extschema@.tb_event_table,
     action                  INTEGER NOT NULL REFERENCES @extschema@.tb_action,
     description             JSONB,
@@ -52,15 +81,18 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
+
 CREATE UNIQUE INDEX ix_source_action_target_unique ON @extschema@.tb_event_table_work_item(
     COALESCE( target_event_table, -1 ),
     source_event_table,
+    COALESCE( source_column_name, '' ),
     action
 );
 
 COMMENT ON TABLE @extschema@.tb_event_table_work_item IS 'A list of actions that should occur for any given event table';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'Indicates the table that can trigger this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.target_event_table IS 'Indicates the target of this work items action. Not necessary but useful for any user interface built around this';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_column_name IS 'Indicated the column of the source table this event if firing on. This is not used for selectively firing update triggers but to help prevent the user from implementing identical/similar events';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.action IS 'Foreign key to tb_action - indicates what this work item generates parameters for';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.description IS 'User-facing description for that this work item is / does';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.transaction_label IS 'Label for what the action is performing. Used in Cyanaudit integration';
@@ -69,29 +101,63 @@ COMMENT ON COLUMN @extschema@.tb_event_table_work_item.when_function IS 'Filters
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.op IS 'Indicates what DML operation this work item applies: U - Update, I - Insert, D - Delete.';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.execute_asynchronously IS 'Determines what mode of execution this work item will be ran under.';
 
-CREATE TABLE @extschema@.tb_event_queue
-(
-    event_table_work_item   INTEGER,
-    uid                     INTEGER,
-    recorded                TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
-    pk_value                INTEGER NOT NULL,
-    op                      CHAR(1),
-    old                     JSONB,
-    new                     JSONB,
-    CHECK( (  op IN( 'D', 'U', 'I' ) ) )
-);
+DO
+ $_$
+BEGIN
+    IF( COALESCE( current_setting( '@extschema@.unlogged_queue', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        CREATE UNLOGGED TABLE @extschema@.tb_event_queue
+        (
+            foo BOOLEAN
+        );
+    ELSE
+        CREATE TABLE @extschema@.tb_event_queue
+        (
+            foo BOOLEAN
+        );
+    END IF;
+END
+ $_$
+    LANGUAGE 'plpgsql';
+
+ALTER TABLE @extschema@.tb_event_queue
+    DROP COLUMN foo,
+    ADD COLUMN event_table_work_item INTEGER,
+    ADD COLUMN uid INTEGER,
+    ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
+    ADD COLUMN pk_value INTEGER NOT NULL,
+    ADD COLUMN op CHAR(1),
+    ADD COLUMN old JSONB,
+    ADD COLUMN new JSONB,
+    ADD CONSTRAINT op_check CHECK ( ( op IN( 'D', 'U', 'I' ) ) );
 
 COMMENT ON TABLE @extschema@.tb_event_queue IS 'Queue for events arriving from tb_event_tables. Contents are copied from their corresponding event_table_work_item entry.';
 
-CREATE TABLE @extschema@.tb_work_queue
-(
-    parameters              JSONB NOT NULL,
-    action                  INTEGER NOT NULL REFERENCES @extschema@.tb_action,
-    uid                     INTEGER,
-    recorded                TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
-    transaction_label       VARCHAR,
-    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE )
-);
+DO
+ $_$
+BEGIN
+    IF( COALESCE( current_setting( '@extschema@.unlogged_queue', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        CREATE UNLOGGED TABLE @extschema@.tb_work_queue
+        (
+            foo BOOLEAN
+        );
+    ELSE
+        CREATE TABLE @extschema@.tb_work_queue
+        (
+            foo BOOLEAN
+        );
+    END IF;
+END
+ $_$
+    LANGUAGE 'plpgsql';
+
+ALTER TABLE @extschema@.tb_work_queue
+    DROP COLUMN foo,
+    ADD COLUMN parameters JSONB NOT NULL,
+    ADD COLUMN action INTEGER NOT NULL REFERENCES @extschema@.tb_action,
+    ADD COLUMN uid INTEGER,
+    ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
+    ADD COLUMN transaction_label VARCHAR,
+    ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE );
 
 COMMENT ON TABLE @extschema@.tb_work_queue IS 'Queue for work_item_query results. Remaining contents copied from the corresponding event_queue entry';
 
@@ -111,8 +177,20 @@ BEGIN
         RAISE EXCEPTION '% is not an extension GUC and cannot be modified using this table', NEW.key;
     END IF;
 
-    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || NEW.key || ' = ''' || NEW.value || '''';
-    EXECUTE 'SET ' || NEW.key || ' = ''' || NEW.value || '''';
+    -- GUC takes effect for new sessions
+    EXECUTE format(
+        'ALTER DATABASE %I SET %s = %L',
+        current_database(),
+        NEW.key,
+        NEW.value
+    );
+
+    -- GUC takes effect for current session
+    EXECUTE format(
+        'SET %s = %L',
+        NEW.key,
+        NEW.value
+    );
     RETURN NEW;
 END
  $_$
@@ -451,7 +529,7 @@ BEGIN
     END LOOP;
 
     -- Replace any remaining bindpoints with NULL
-    my_query := regexp_replace( my_query, '\?\w+\?', 'NULL', 'g' );
+    my_query := regexp_replace( my_query, '\?(((OLD)|(NEW))\.)?\w+\?', 'NULL', 'g' );
 
     FOR my_parameters IN EXECUTE my_query LOOP
         INSERT INTO @extschema@.tb_work_queue

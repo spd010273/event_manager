@@ -17,8 +17,9 @@
 
 /* Static Strings */
 static const char * user_agent = "\
-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
-(KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36";
+Mozilla/5.0 (X11; Linux x86_64; Event Manager)";
+// Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+// (KHTML, like Gecko) Chrome/66.0.3359.139 Safari/537.36";
 
 /* Queries */
 static const char * extension_check_query = "\
