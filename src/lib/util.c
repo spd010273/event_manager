@@ -27,15 +27,15 @@ bool work_listener  = false;
 char * conninfo = NULL;
 
 static const char * usage_string = "\
-Usage: event_manager \
-    -U DB User (default: postgres) \
-    -p DB Port (default: 5432) \
-    -h DB Host (default: localhost) \
-    -d DB name (default: DB User) \
-    -E | -W Start Event or Work Queue Processor, respectively \
-  [ -D debug mode \
-    -v VERSION \
-    -? HELP ]";
+Usage: event_manager\n \
+    -U DB User (default: postgres)\n \
+    -p DB Port (default: 5432)\n \
+    -h DB Host (default: localhost)\n \
+    -d DB name (default: DB User)\n \
+    -E | -W Start Event or Work Queue Processor, respectively\n \
+  [ -D debug mode\n \
+    -v VERSION\n \
+    -? HELP ]\n";
 
 void _parse_args( int argc, char ** argv )
 {

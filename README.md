@@ -46,11 +46,12 @@ Results of actions are discarded.
 ## Installation
 1. Checkout the event_manager source from github
 2. Ensure that pg_config is in the user's path
-3. Run make to compile the event_manager executable
-4. As superuser, run 'make install' with event_manager in your current directory
-5. Log into the database server
-6. Run 'CREATE EXTENSION event_manager;'
-7. Start the event_manager program with connection parameters to your target DB server/instance.
+3. Follow installation guide in docs/setup.md for setting up and checking prerequisites
+4. Run make to compile the event_manager executable
+5. As superuser, run 'make install' with event_manager in your current directory
+6. Log into the database server
+7. Run 'CREATE EXTENSION event_manager;'
+8. Start the event_manager program with connection parameters to your target DB server/instance.
 
 ## Changelog
 

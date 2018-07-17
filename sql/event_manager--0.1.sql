@@ -191,6 +191,11 @@ BEGIN
         NEW.key,
         NEW.value
     );
+    
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: set configuration parameter % to %', NEW.key, NEW.value;
+    END IF;
+
     RETURN NEW;
 END
  $_$
@@ -285,6 +290,10 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Event table does not exist or is not a relation.';
     END IF;
+    
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: Catalog check for event table passed';
+    END IF;
 
     RETURN NEW;
 END
@@ -340,6 +349,10 @@ BEGIN
                         'NULL'
                     ) || '::INTEGER'
        INTO my_uid;
+    
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: event_enqueue - uid %', my_uid;
+    END IF;
 
     FOR my_when_function,
         my_event_table_work_item
@@ -386,6 +399,10 @@ BEGIN
                             old_record,
                             new_record
                         );
+    
+            IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+                RAISE DEBUG '@extschema@: event enqueued';
+            END IF;
         END IF;
     END LOOP;
     RETURN my_record;
@@ -431,6 +448,11 @@ INNER JOIN pg_constraint cn
                 NEW.table_name,
                 my_pk_column
             );
+    
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: created trigger on %.%', NEW.schema_name, NEW.column_name;
+    END IF;
+   
     RETURN NEW;
 END
  $_$
@@ -454,6 +476,10 @@ BEGIN
                 OLD.schema_name,
                 OLD.table_name
             );
+    
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: dropped event trigger on %.%', OLD.schema_name, OLD.table_name;
+    END IF;
 
     RETURN OLD;
 END
@@ -501,6 +527,10 @@ BEGIN
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_event_queue_item;
+ 
+        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+            RAISE DEBUG '@extschema@: event processing - async notify sent';
+        END IF;
         RETURN NEW;
     END IF;
 
@@ -509,6 +539,10 @@ BEGIN
                 'NULL'
             ) || '::INTEGER'
       INTO my_uid;
+
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: event processing - uid %', my_uid;
+    END IF;
 
     my_query := regexp_replace( my_query, '\?pk_value\?', NEW.pk_value::VARCHAR, 'g' );
     my_query := regexp_replace( my_query, '\?recorded\?', quote_nullable( NEW.recorded::VARCHAR ), 'g' );
@@ -531,6 +565,10 @@ BEGIN
     -- Replace any remaining bindpoints with NULL
     my_query := regexp_replace( my_query, '\?(((OLD)|(NEW))\.)?\w+\?', 'NULL', 'g' );
 
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: Event processing - Final query %', my_query;
+    END IF;
+
     FOR my_parameters IN EXECUTE my_query LOOP
         INSERT INTO @extschema@.tb_work_queue
                     (
@@ -550,6 +588,10 @@ BEGIN
                         my_action,
                         my_is_async
                     );
+
+        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+            RAISE DEBUG '@extschema@: Created work queue row';
+        END IF;
     END LOOP;
 
     DELETE FROM @extschema@.tb_event_queue eq
@@ -560,6 +602,10 @@ BEGIN
             AND eq.op IS NOT DISTINCT FROM NEW.op
             AND eq.old::VARCHAR IS NOT DISTINCT FROM NEW.old::VARCHAR
             AND eq.new::VARCHAR IS NOT DISTINCT FROM NEW.new::VARCHAR;
+
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: Processed event queue item';
+    END IF;
 
     RETURN NEW;
 END
@@ -595,6 +641,10 @@ BEGIN
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_work_queue_item;
+
+        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+            RAISE DEBUG '@extschema@: work processing - sent async notify';
+        END IF;
         RETURN NULL;
     END IF;
 
@@ -641,6 +691,10 @@ BEGIN
         my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
 
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: work processing - final query is %', my_query;
+    END IF;
+
     EXECUTE my_query;
 
     PERFORM p.proname
@@ -653,6 +707,10 @@ BEGIN
     IF FOUND THEN
         EXECUTE 'SELECT fn_label_transaction( $1 )'
           USING NEW.transaction_label;
+
+        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+            RAISE DEBUG '@extschema@: cyanaudit hook fired';
+        END IF;
     END IF;
 
     DELETE FROM @extschema@.tb_work_queue
@@ -662,6 +720,10 @@ BEGIN
             AND recorded IS NOT DISTINCT FROM NEW.recorded
             AND transaction_label IS NOT DISTINCT FROM NEW.transaction_label
             AND execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously;
+
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: Processed work queue item';
+    END IF;
     RETURN NULL;
 END
  $_$
@@ -690,6 +752,10 @@ BEGIN
             );
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Function % is not in catalog', NEW.when_function;
+    END IF;
+
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: when function validated';
     END IF;
 
     RETURN NEW;

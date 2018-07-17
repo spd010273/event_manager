@@ -28,6 +28,7 @@ sudo make install
 
 ## Debian / Ubuntu
 
+Todo
 
 ## Windows
 No
