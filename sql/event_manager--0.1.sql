@@ -235,7 +235,8 @@ INSERT INTO @extschema@.tb_setting
             ( '@extschema@.set_uid_function', 'NULL' ),
             ( '@extschema@.get_uid_function', 'NULL' ),
             ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' ),
-            ( '@extschema@.session_gucs', '' );
+            ( '@extschema@.session_gucs', '' ),
+            ( '@extschema@.base_url', 'localhost' );
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance

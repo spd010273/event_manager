@@ -85,6 +85,8 @@ If an action is a URI call, the parameter list is built in the following form:
 <uri>?param1=value1&param2=value2&....
 ```
 
+Additionally, a special bindpoint within URIs exists: __BASE_URL__, which will be overwritten with the value of the GUC event_manager.base_url, if present.
+
 ## When Function
 
 When functions act as a gatekeeper to the event queue, preventing spurious entries from making their way into the queue.

@@ -63,7 +63,11 @@ DELETE FROM " EXTENSION_NAME ".tb_event_queue eq \
 static const char * get_work_queue_item = "\
     SELECT wq.parameters, \
            a.static_parameters, \
-           a.uri, \
+           regexp_replace( \
+                a.uri, \
+                '__BASE_URL__', \
+                COALESCE( current_setting( '" EXTENSION_NAME ".base_url', TRUE ), 'localhost' ) \
+           ) AS uri, \
            COALESCE( a.method, 'GET' ) AS method, \
            a.query, \
            a.use_ssl, \
