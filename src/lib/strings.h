@@ -39,6 +39,7 @@ static const char * get_event_queue_item = "\
            etwi.execute_asynchronously, \
            eq.old, \
            eq.new, \
+           eq.session_values, \
            eq.ctid \
       FROM " EXTENSION_NAME ".tb_event_queue eq \
 INNER JOIN " EXTENSION_NAME ".tb_event_table_work_item etwi \
@@ -55,8 +56,9 @@ DELETE FROM " EXTENSION_NAME ".tb_event_queue eq \
         AND eq.pk_value = $4::INTEGER \
         AND eq.op = $5::CHAR(1) \
         AND eq.old::TEXT IS NOT DISTINCT FROM $6::TEXT \
-        AND eq.new::TEXT IS NOT DISTINCT FROM $7::TEXT\
-        AND eq.ctid = $8::TID";
+        AND eq.new::TEXT IS NOT DISTINCT FROM $7::TEXT \
+        AND eq.session_values::TEXT IS NOT DISTINCT FROM $8::TEXT \
+        AND eq.ctid = $9::TID";
 
 static const char * get_work_queue_item = "\
     SELECT wq.parameters, \
@@ -69,6 +71,7 @@ static const char * get_work_queue_item = "\
            wq.recorded, \
            wq.transaction_label, \
            wq.action, \
+           wq.session_values, \
            wq.ctid \
       FROM " EXTENSION_NAME ".tb_work_queue wq \
 INNER JOIN " EXTENSION_NAME ".tb_action a \
@@ -84,7 +87,8 @@ DELETE FROM " EXTENSION_NAME ".tb_work_queue \
         AND recorded = $3::TIMESTAMP \
         AND transaction_label IS NOT DISTINCT FROM $4::VARCHAR \
         AND action = $5::INTEGER \
-        AND ctid = $6::TID";
+        AND session_values::TEXT IS NOT DISTINCT FROM $6::TEXT \
+        AND ctid = $7::TID";
 
 static const char * new_work_item_query = "\
 INSERT INTO " EXTENSION_NAME ".tb_work_queue \
@@ -94,7 +98,8 @@ INSERT INTO " EXTENSION_NAME ".tb_work_queue \
                 recorded, \
                 transaction_label, \
                 action, \
-                execute_asynchronously \
+                execute_asynchronously, \
+                session_values \
             ) \
      VALUES \
             ( \
@@ -103,7 +108,8 @@ INSERT INTO " EXTENSION_NAME ".tb_work_queue \
                 COALESCE( NULLIF( $3, '' )::TIMESTAMP, clock_timestamp() ), \
                 NULLIF( $4, '' )::VARCHAR, \
                 NULLIF( $5, '' )::INTEGER, \
-                NULLIF( $6, '' )::BOOLEAN \
+                NULLIF( $6, '' )::BOOLEAN, \
+                NULLIF( $7::TEXT, '' )::JSONB \
             )";
 
 static const char * _uid_function = "\

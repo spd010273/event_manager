@@ -23,4 +23,3 @@ See docs/tests.md for test prerequisites for and installation of tests. This tes
 ## Notes
 
 * Remote calls will show as coming from User Agent 'EventManagerbot/0.1 (+https://bitbucket.org/neadwerx/event_manager/src/master/)'
-* 

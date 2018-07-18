@@ -12,7 +12,7 @@
  */
 
 /*
- *   Note to user, this extension is configurable,
+ *  Note to user, this extension is configurable,
  *     within the head of this file, there are GUCs that can be set prior
  *     to installation that changes the behavior of this extension. These are
  *     enumerated below:
@@ -22,14 +22,18 @@
  *                                 Additionally, the queues will NOT be replicated when set to TRUE
  *     @extschema@.
  *
+ *
+ *  Note:
+ *      9.6 compatibility is for 2-parameter current_setting()
+ *      (introduced in 9.6) and to_jsonb (introduced in 9.5)
  */
 
 /* Version Check */
 DO
  $$
 BEGIN
-    IF( regexp_matches( version(), 'PostgreSQL (\d)+\.(\d+)\.(\d+)' )::INTEGER[] < ARRAY[9,4,0]::INTEGER[] ) THEN
-        RAISE EXCEPTION 'Event Manager requires PostgreSQL 9.4 or above';
+    IF( regexp_matches( version(), 'PostgreSQL (\d)+\.(\d+)\.(\d+)' )::INTEGER[] < ARRAY[9,6,0]::INTEGER[] ) THEN
+        RAISE EXCEPTION 'Event Manager requires PostgreSQL 9.6 or above';
     END IF;
 END
  $$
@@ -125,12 +129,21 @@ ALTER TABLE @extschema@.tb_event_queue
     ADD COLUMN uid INTEGER,
     ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     ADD COLUMN pk_value INTEGER NOT NULL,
-    ADD COLUMN op CHAR(1),
+    ADD COLUMN op CHAR(1) NOT NULL,
     ADD COLUMN old JSONB,
     ADD COLUMN new JSONB,
+    ADD COLUMN session_values JSONB,
     ADD CONSTRAINT op_check CHECK ( ( op IN( 'D', 'U', 'I' ) ) );
 
 COMMENT ON TABLE @extschema@.tb_event_queue IS 'Queue for events arriving from tb_event_tables. Contents are copied from their corresponding event_table_work_item entry.';
+COMMENT ON COLUMN @extschema@.tb_event_queue.event_table_work_item IS 'reference to the trigger deinition this event corresponds to';
+COMMENT ON COLUMN @extschema@.tb_event_queue.uid IS 'Stores the optional session-level user identifier that triggered this event, set by the @extschema@.get_uid_function call';
+COMMENT ON COLUMN @extschema@.tb_event_queue.recorded IS 'timestamp of when the event was triggered';
+COMMENT ON COLUMN @extschema@.tb_event_queue.pk_value IS 'The primary key of the source_table whose modification caused this event to fire';
+COMMENT ON COLUMN @extschema@.tb_event_queue.op IS 'The DML operation that caused this event to fire, either I, U, or D';
+COMMENT ON COLUMN @extschema@.tb_event_queue.old IS 'Copy of the plpgsql OLD psuedorecord';
+COMMENT ON COLUMN @extschema@.tb_event_queue.new IS 'Copy of the plpgsql new psuedorecord';
+COMMENT ON COLUMN @extschema@.tb_event_queue.session_values IS 'Copy of the comma-delimited session GUCs specified in @extschema@.session_gucs';
 
 DO
  $_$
@@ -157,9 +170,17 @@ ALTER TABLE @extschema@.tb_work_queue
     ADD COLUMN uid INTEGER,
     ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     ADD COLUMN transaction_label VARCHAR,
-    ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE );
+    ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
+    ADD COLUMN session_values JSONB;
 
 COMMENT ON TABLE @extschema@.tb_work_queue IS 'Queue for work_item_query results. Remaining contents copied from the corresponding event_queue entry';
+COMMENT ON COLUMN @extschema@.tb_work_queue.parameters IS 'Parameters returned by work_item_query';
+COMMENT ON COLUMN @extschema@.tb_work_queue.action IS 'Action that will be executed';
+COMMENT ON COLUMN @extschema@.tb_work_queue.uid IS 'uid from event_queue';
+COMMENT ON COLUMN @extschema@.tb_work_queue.recorded IS 'Recorded timestamp from event_queue';
+COMMENT ON COLUMN @extschema@.tb_work_queue.transaction_label IS 'Label for transaction in Cyanaudit, if installed';
+COMMENT ON COLUMN @extschema@.tb_work_queue.execute_asynchronously IS 'Indicates how this action should be executed';
+COMMENT ON COLUMN @extschema@.tb_work_queue.session_values IS 'Copy of the session values from the event queue';
 
 CREATE TABLE @extschema@.tb_setting
 (
@@ -191,7 +212,7 @@ BEGIN
         NEW.key,
         NEW.value
     );
-    
+
     IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: set configuration parameter % to %', NEW.key, NEW.value;
     END IF;
@@ -213,7 +234,8 @@ INSERT INTO @extschema@.tb_setting
      VALUES ( '@extschema@.execute_asynchronously', 't' ),
             ( '@extschema@.set_uid_function', 'NULL' ),
             ( '@extschema@.get_uid_function', 'NULL' ),
-            ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' );
+            ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' ),
+            ( '@extschema@.session_gucs', '' );
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance
@@ -290,7 +312,7 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Event table does not exist or is not a relation.';
     END IF;
-    
+
     IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: Catalog check for event table passed';
     END IF;
@@ -316,6 +338,7 @@ DECLARE
     old_record                  JSONB;
     my_uid                      INTEGER;
     my_event_table_work_item    INTEGER;
+    my_guc_values               JSONB;
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
         my_record := NEW;
@@ -349,7 +372,18 @@ BEGIN
                         'NULL'
                     ) || '::INTEGER'
        INTO my_uid;
-    
+
+    IF( length( current_setting( '@extschema@.session_gucs', TRUE ) ) > 0 ) THEN
+        SELECT jsonb_object(
+                   array_agg( x ORDER BY x ),
+                   array_agg( current_setting( x, TRUE ) ORDER BY x )
+               )
+          INTO my_guc_values
+          FROM regexp_split_to_table(
+                   current_setting( '@extschema@.session_gucs', TRUE )
+               ) x;
+    END IF;
+
     IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: event_enqueue - uid %', my_uid;
     END IF;
@@ -387,7 +421,8 @@ BEGIN
                             pk_value,
                             op,
                             old,
-                            new
+                            new,
+                            session_values
                         )
                  VALUES
                         (
@@ -397,9 +432,10 @@ BEGIN
                             my_pk_value,
                             substr( TG_OP, 1, 1 ),
                             old_record,
-                            new_record
+                            new_record,
+                            my_guc_values
                         );
-    
+
             IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
                 RAISE DEBUG '@extschema@: event enqueued';
             END IF;
@@ -448,11 +484,11 @@ INNER JOIN pg_constraint cn
                 NEW.table_name,
                 my_pk_column
             );
-    
+
     IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: created trigger on %.%', NEW.schema_name, NEW.column_name;
     END IF;
-   
+
     RETURN NEW;
 END
  $_$
@@ -476,7 +512,7 @@ BEGIN
                 OLD.schema_name,
                 OLD.table_name
             );
-    
+
     IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: dropped event trigger on %.%', OLD.schema_name, OLD.table_name;
     END IF;
@@ -527,7 +563,7 @@ BEGIN
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_event_queue_item;
- 
+
         IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
             RAISE DEBUG '@extschema@: event processing - async notify sent';
         END IF;
@@ -558,6 +594,14 @@ BEGIN
                                 SELECT 'NEW.' || key,
                                        value
                                   FROM jsonb_each_text( NEW.new )
+                           ) LOOP
+        my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
+    END LOOP;
+
+    FOR my_key, my_value IN(
+                            SELECT key,
+                                   value
+                              FROM jsonb_each_text( NEW.session_values )
                            ) LOOP
         my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
@@ -690,6 +734,16 @@ BEGIN
                            ) LOOP
         my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
+
+    FOR my_key, my_value IN(
+                            SELECT key,
+                                   value
+                              FROM jsonb_each_text( NEW.session_values )
+                           ) LOOP
+        my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
+    END LOOP;
+
+    my_query := regexp_replace( my_query, '\?(((OLD)|(NEW))\.)?\w+\?', 'NULL', 'g' );
 
     IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: work processing - final query is %', my_query;

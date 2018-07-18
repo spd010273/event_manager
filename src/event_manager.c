@@ -77,8 +77,8 @@ void _queue_loop( const char *, int (*)(void) );
 int work_queue_handler( void );
 int event_queue_handler( void );
 bool execute_action( PGresult *, int );
-bool execute_action_query( char *, char *, char *, char *, char *, char * );
-bool execute_remote_uri_call( char *, char *, char *, char *, bool );
+bool execute_action_query( char *, char *, char *, char *, char *, char *, char * );
+bool execute_remote_uri_call( char *, char *, char *, char *, bool, char * );
 bool set_uid( char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
@@ -423,9 +423,10 @@ int event_queue_handler( void )
     char * event_table_work_item = NULL;
     char * old                   = NULL;
     char * new                   = NULL;
+    char * session_values        = NULL;
 
     char * parameters = NULL;
-    char * params[8]  = {NULL};
+    char * params[9]  = {NULL};
     int    i          = 0;
 
     if( !_begin_transaction() )
@@ -483,6 +484,7 @@ int event_queue_handler( void )
     pk_value               = get_column_value( 0, result, "pk_value" );
     old                    = get_column_value( 0, result, "old" );
     new                    = get_column_value( 0, result, "new" );
+    session_values         = get_column_value( 0, result, "session_values" );
 
     work_item_query_obj = _new_query( work_item_query );
 
@@ -528,6 +530,12 @@ int event_queue_handler( void )
         "OLD."
     );
 
+    work_item_query_obj = _add_json_parameter_to_query(
+        work_item_query_obj,
+        session_values,
+        ( char * ) NULL
+    );
+
     work_item_query_obj = _finalize_query( work_item_query_obj );
 
     if( work_item_query_obj == NULL )
@@ -569,6 +577,7 @@ int event_queue_handler( void )
     params[3] = transaction_label;
     params[4] = action;
     params[5] = execute_asynchronously;
+    params[6] = session_values;
 
     for( i = 0; i < PQntuples( work_item_result ); i++ )
     {
@@ -578,7 +587,7 @@ int event_queue_handler( void )
         insert_result = _execute_query(
             ( char * ) new_work_item_query,
             params,
-            6,
+            7,
             true
         );
 
@@ -605,12 +614,13 @@ int event_queue_handler( void )
     params[4] = op;
     params[5] = old;
     params[6] = new;
-    params[7] = ctid;
+    params[7] = session_values;
+    params[8] = ctid;
 
     delete_result = _execute_query(
         ( char * ) delete_event_queue_item,
         params,
-        8,
+        9,
         true
     );
 
@@ -650,7 +660,7 @@ int work_queue_handler( void )
     bool   action_result = false;
     int    row_count     = 0;
     int    i             = 0;
-    char * params[6]     = {NULL};
+    char * params[7]     = {NULL};
 
     _log(
         LOG_LEVEL_DEBUG,
@@ -702,7 +712,8 @@ int work_queue_handler( void )
         params[2] = get_column_value( i, result, "recorded" );
         params[3] = get_column_value( i, result, "transaction_label" );
         params[4] = get_column_value( i, result, "action" );
-        params[5] = get_column_value( i, result, "ctid" );
+        params[5] = get_column_value( i, result, "session_values" );
+        params[6] = get_column_value( i, result, "ctid" );
 
         /* Get detailed information about action, get parameter list */
         _log(
@@ -723,7 +734,7 @@ int work_queue_handler( void )
         delete_result = _execute_query(
             ( char * ) delete_work_queue_item,
             params,
-            6,
+            7,
             true
         );
 
@@ -824,7 +835,7 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
     return real_size;
 }
 
-bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters, bool use_ssl )
+bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters, bool use_ssl, char * session_values )
 {
     struct curl_response write_buffer = {0};
     CURLcode response                 = {0};
@@ -850,30 +861,61 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
     }
 
     param_list = _add_json_parameters_to_param_list( curl_handle, param_list, parameters, &malloc_size );
-    malloc_size++;
 
-    param_list = ( char * ) realloc( param_list, malloc_size );
-
-    if( param_list == NULL )
+    if( static_parameters != NULL )
     {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Unable to allocate memory for simple string concatenation operation :("
-        );
-        return false;
+        malloc_size++;
+        param_list = ( char * ) realloc( param_list, malloc_size );
+
+        if( param_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Unable to allocate memory for simple string concatenation operation :("
+            );
+            return false;
+        }
+
+        strcat( param_list, "&" );
+
+        param_list = _add_json_parameters_to_param_list( curl_handle, param_list, static_parameters, &malloc_size );
+
+        if( param_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to substitute parameters in URI parameter list"
+            );
+            return false;
+        }
     }
 
-    strcat( param_list, "&" );
-
-    param_list = _add_json_parameters_to_param_list( curl_handle, param_list, static_parameters, &malloc_size );
-
-    if( param_list == NULL )
+    if( session_values != NULL )
     {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to substitute parameters in URI parameter list"
-        );
-        return false;
+        malloc_size++;
+        param_list = ( char * ) realloc( param_list, malloc_size );
+
+        if( param_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Unable to allocate memory for simple string concatenation operation :("
+            );
+            return false;
+        }
+
+        strcat( param_list, "&" );
+
+        param_list = _add_json_parameters_to_param_list( curl_handle, param_list, session_values, &malloc_size );
+
+        if( param_list == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to substitute session_values in URI parameter list"
+            );
+            return false;
+        }
     }
 
     if( enable_curl )
@@ -1059,7 +1101,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
     return true;
 }
 
-bool execute_action_query( char * query, char * static_parameters, char * parameters, char * uid, char * recorded, char * transaction_label )
+bool execute_action_query( char * query, char * static_parameters, char * parameters, char * uid, char * recorded, char * transaction_label, char * session_values )
 {
     PGresult * action_result;
     struct query * action_query;
@@ -1081,6 +1123,7 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
     _log( LOG_LEVEL_DEBUG, "PARAMS: %s", parameters );
     action_query = _add_json_parameter_to_query( action_query, parameters, ( char * ) NULL );
     action_query = _add_json_parameter_to_query( action_query, static_parameters, ( char * ) NULL );
+    action_query = _add_json_parameter_to_query( action_query, session_values, ( char * ) NULL );
     action_query = _finalize_query( action_query );
 
     // Set UID
@@ -1142,12 +1185,14 @@ bool execute_action( PGresult * result, int row )
     char * uri               = NULL;
     char * query             = NULL;
     char * use_ssl           = NULL;
+    char * session_values    = NULL;
     bool usessl              = false;
 
     parameters        = get_column_value( row, result, "parameters" );
     uid               = get_column_value( row, result, "uid" );
     recorded          = get_column_value( row, result, "recorded" );
     transaction_label = get_column_value( row, result, "transaction_label" );
+    session_values    = get_column_value( row, result, "session_values" );
     uri               = get_column_value( row, result, "uri" );
 
     if( is_column_null( row, result, "static_parameters" ) == false )
@@ -1157,7 +1202,7 @@ bool execute_action( PGresult * result, int row )
 
     method            = get_column_value( row, result, "method" );
     query             = get_column_value( row, result, "query" );
-    use_ssl            = get_column_value( row, result, "use_ssl" );
+    use_ssl           = get_column_value( row, result, "use_ssl" );
 
     if( strcmp( use_ssl, "t" ) == 0 || strcmp( use_ssl, "T" ) == 0 )
     {
@@ -1177,7 +1222,8 @@ bool execute_action( PGresult * result, int row )
             parameters,
             uid,
             recorded,
-            transaction_label
+            transaction_label,
+            session_values
         );
 
         if( execute_action_result == true && cyanaudit_installed == true )
@@ -1197,7 +1243,8 @@ bool execute_action( PGresult * result, int row )
             static_parameters,
             method,
             parameters,
-            usessl
+            usessl,
+            session_values
         );
     }
     else

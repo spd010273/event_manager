@@ -11,31 +11,34 @@ Events can be processed either synchronously or asynchronously in both stages of
 
 ![Concept](images/event_manager_concept.png)
 
+
 # Usage
 
 For more information on using this extension, see docs/usage.md
 
-## Creating Events
+
+## Events
 
 Events can be 'subscribed to' by inserting the table into tb_event_table and creating at least one tb_event_table_work_item for that table.
 
-When DML occurs on that table, the work item entries for that event table are executed. These potential queue elements are filtered by a function that can determine whether these events apply to the work item.
+When DML occurs on that table (an event), the work item entries for that event table are executed. These potential queue elements are optionally filtered by a function that can determine whether these events apply to this specific work item.
 
-Work item queries are expected to generate one or more rows of JSONB aliased as 'parameters' which are fed into the action.
+Work item queries are expected to generate one or more rows of JSONB aliased as 'parameters' which are fed into the action. Along with these parameters, the original event's transaction timestamp and other datapoints will be made available to the action.
 
+## Event Query (work_item_query)
 
-## Creating Actions
+This query gathers the dynamic arguments for the following Action, and together with optional session and static parameters, form the full argument list for the action.
 
-Actions are either local database modification or remote API calls that happen after an event is processed. Parameters for these calls are gathered from the action's static parameter list, as well as the results from the work item query, or static parameters stored with the action.
+## Actions
 
-Results of actions are discarded.
+Actions are either local database modification or remote API calls that happen after an event is processed. Parameters for these calls are gathered from the action's static parameter list, as well as the results from the work item query, or static parameters stored with the action. Results of actions are currently discarded.
 
 # Schema
 
 ![Schema](images/event_manager_schema.png)
 
 ## Requirements:
-* PostgreSQL 9.4+
+* PostgreSQL 9.6+
 * gcc
 * libcurl
 * PostgreSQL development packages

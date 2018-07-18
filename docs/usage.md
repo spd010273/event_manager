@@ -1,7 +1,14 @@
 # Usage
 
 ## Work Item Queries
-Event Manager relies on work_item_queries to generate parameters for action queries or remote API calls
+Event Manager relies on work_item_queries to generate parameters for action queries or remote API calls.
+
+work_item_queries perform several critical tasks:
+
+* Gathering arguments for the action
+* Sanity checking the state of the data
+* implementing customer/business logic
+* Limiting the scope of the action
 
 work item queries can take multiple bindpoints pertaining to the event that happened.
 The following values from the new tb_event_queue row will be bound into the query, if a bindpoint exists:
@@ -14,6 +21,20 @@ The following values from the new tb_event_queue row will be bound into the quer
 ?op?
 ?transaction_label?
 ```
+
+Work item queries also have access to several JSONB structures, old, new, and session_values
+
+old and new are copies of the OLD and NEW pl/pgsql psuedorecords, respectively. Bindpoints are represented similarly to how they are expressed in pl/pgsql:
+```bash
+... ?OLD.column_name? ...
+```
+
+session_values take the name of their respecive GUC they are copied from, and represent the state of the GUC at the time the event was triggered. These enable session information to be passed to the action in asynchronous mode.
+```bash
+... ?foo.bar_baz? ...
+```
+
+Any unbound bindpoints in a work_item_query are replaced with NULL prior to execution.
 
 The work item query is expected to return JSONB aliased as parameters. These key-value pairs will be used as bindpoints for the action query or parameters in a remote API call
 
@@ -36,7 +57,8 @@ INNER JOIN event_manager.tb_event_table et
         ON et.event_table = etwi.event_table
        AND et.table_name = 'tb_baz'
        AND et.schema_name = 'myschema'
-     WHERE '?op?'::VARCHAR = 'U'
+     WHERE ?op?::CHAR(1) = 'U'
+       AND ?OLD.foobar?::TEXT IS DISTINCT FROM ?NEW.foobar?
 ```
 
 Some guidelines to work queries:
@@ -47,6 +69,7 @@ Some guidelines to work queries:
 * Work item queries can have a bindpoint make multiple appearances in the same query
 * Work item queries that generate multiple rows will result in multiple actions (1:1 to query output)
 * Work item queries will have access to the trigger's copy of row psuedorecords NEW and OLD. These will appead in the new and old JSONB entries in tb_work_queue, and can be bound in with ?NEW.<record_column_name>? or ?OLD.<record_column_name>?, for example
+* Work item queries and actions will have access to session GUCs specified in event_manager.session_gucs (this is a comma delimited list)
 * Any unbound placeholders will be replaced with SQL NULL upon execution
 
 ## Actions
@@ -55,7 +78,7 @@ Actions can consist of either DML or a URI call.
 Actions will consume work_queue items produced by a work_item_query, and take their parameters from both a static parameter list and parameters.
 If there is a collision on keys in static_parameters and parameters, the parameter's keys are given priority.
 
-Action queries follow the same rules as work_item_queries.
+Action queries follow the same rules as work_item_queries for parameter binding.
 
 If an action is a URI call, the parameter list is built in the following form:
 ```bash
@@ -96,3 +119,16 @@ Some notes about the various modes:
 * event_table_work_item.execute_asynchronously overrides the global setting (the global setting defines the default for this value)
 * Asynchronous mode requires the event_manager process to be started:
   * Start two copies of the process, one with the -W flag (for work queue processing) and another with the -E flag (for event queue processing)
+
+## The Queues
+
+There exist two queues within this extension, tb_event_queue, and tb_work_queue. All of the columns within each queue forms the possible arguments for the query or action that executes from that queue. JSON formatted arguments are expected to be an object (key-value pairs), where the keys are named bind points within the queries and values are what is substituted within those bindpoints.
+
+# The Event Queue
+
+The event queue forms arguments for work_item_queries, and the results of these queries populate tb_work_queue. Upon successful processing of the event, the queue entry is fully dequeued from the table.
+
+# The Work Queue
+
+The work queue lists arguments for actions, and the result of these actions are discarded. Upon successful completion of the action, the entry is fully dequeued from the table.
+
