@@ -79,7 +79,7 @@ int event_queue_handler( void );
 bool execute_action( PGresult *, int );
 bool execute_action_query( char *, char *, char *, char *, char *, char *, char * );
 bool execute_remote_uri_call( char *, char *, char *, char *, bool, char * );
-bool set_uid( char * );
+bool set_uid( char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
@@ -1127,7 +1127,7 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
     action_query = _finalize_query( action_query );
 
     // Set UID
-    set_uid( uid );
+    set_uid( uid, session_values );
 
     if( action_query == NULL )
     {
@@ -1356,7 +1356,7 @@ bool _begin_transaction( void )
     return true;
 }
 
-bool set_uid( char * uid )
+bool set_uid( char * uid, char * session_values )
 {
     PGresult *     uid_function_result = NULL;
     struct query * set_uid_query_obj   = NULL;
@@ -1421,6 +1421,8 @@ bool set_uid( char * uid )
     free( set_uid_query );
 
     set_uid_query_obj = _add_parameter_to_query( set_uid_query_obj, "uid", uid );
+    set_uid_query_obj = _add_json_parameter_to_query( set_uid_query_obj, session_values, ( char * ) NULL );
+    set_uid_query_obj = _finalize_query( set_uid_query_obj );
 
     if( set_uid_query_obj == NULL )
     {
