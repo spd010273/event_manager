@@ -380,7 +380,8 @@ BEGIN
                )
           INTO my_guc_values
           FROM regexp_split_to_table(
-                   current_setting( '@extschema@.session_gucs', TRUE )
+                   current_setting( '@extschema@.session_gucs', TRUE ),
+                   ','
                ) x;
     END IF;
 
