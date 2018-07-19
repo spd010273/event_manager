@@ -448,6 +448,65 @@ END
  $_$
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
 
+CREATE OR REPLACE FUNCTION @extschema@.fn_no_ddl_check()
+RETURNS TRIGGER AS
+ $_$
+DECLARE
+    my_query TEXT;
+    my_regexp TEXT;
+BEGIN
+    /*
+     * Try to prevent malicious behavior by preventing DDL or overly broad DML from being ran
+     * This is in no way exhaustive or complete.
+     */
+    EXECUTE 'SELECT $1.' || TG_ARGV[0]::VARCHAR
+       INTO my_query
+      USING NEW;
+
+    IF( my_query IS NULL ) THEN
+        RETURN NEW;
+    END IF;
+
+    FOR my_regexp IN(
+                        SELECT unnest( ARRAY[
+                            'drop\s+',
+                            'created\+', -- We'll handle CREATE TEMP TABLE ... as a special case
+                            'alter\s+',
+                            'grant\s+',
+                            'revoke\s+'
+                        ]::TEXT[] )
+                    ) LOOP
+        PERFORM regexp_matches( my_query, my_regexp, 'i' );
+
+        IF FOUND THEN
+            PERFORM regexp_matches( my_query, 'create\s+((global\s+)|(local\s+))?temp', 'i' );
+
+            IF FOUND THEN
+                CONTINUE;
+            END IF;
+            RAISE EXCEPTION 'Cannot have DDL within %.%.%', TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_ARGV[0];
+        END IF;
+    END LOOP;
+
+    PERFORM regexp_matches( my_query, 'truncate\s+', 'i' );
+
+    IF FOUND THEN
+        RAISE EXCEPTION 'Cannot have TRUNCATE within %.%.%', TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_ARGV[0];
+    END IF;
+
+    RETURN NEW;
+END
+ $_$
+    LANGUAGE 'plpgsql';
+
+CREATE TRIGGER tr_no_ddl_check
+    BEFORE INSERT OR UPDATE ON @extschema@.tb_action
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_no_ddl_check( 'query' );
+
+CREATE TRIGGER tr_no_ddl_check
+    BEFORE INSERT OR UPDATE ON @extschema@.tb_event_table_work_item
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_no_ddl_check( 'work_item_query' );
+
 CREATE FUNCTION @extschema@.fn_new_event_trigger()
 RETURNS TRIGGER AS
  $_$

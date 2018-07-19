@@ -69,10 +69,10 @@ sub usage(;$)
 
     if( $message )
     {
-        warn "$message\n";
+        carp "$message\n";
     }
 
-    warn "$USAGE_MESSAGE\n";
+    carp "$USAGE_MESSAGE\n";
 
     exit 1;
 }
@@ -116,6 +116,7 @@ sub run_test($) :Export(:DEFAULT)
                 }
             }
         }
+
         $sql .= $line;
     }
 
@@ -413,7 +414,7 @@ if( scalar( @children ) > 0 )
     #kill 'KILL', @children;
 }
 
-my $result = `ps aux | grep "\./[e]vent_manager" | awk '{ print \$2 }'`;
+my $result = `ps aux | grep "[e]vent_manager\s+" | awk '{ print \$2 }'`;
 
 foreach my $pid( split( "\n", $result ) )
 {
