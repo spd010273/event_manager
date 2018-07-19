@@ -66,7 +66,7 @@ static const char * get_work_queue_item = "\
            regexp_replace( \
                 a.uri, \
                 '__BASE_URL__', \
-                COALESCE( current_setting( '" EXTENSION_NAME ".base_url', TRUE ), 'localhost' ) \
+                COALESCE( current_setting( '" EXTENSION_NAME ".base_url', wg.session_values->>'" EXTENSION_NAME ".base_url', TRUE ), 'localhost' ) \
            ) AS uri, \
            COALESCE( a.method, 'GET' ) AS method, \
            a.query, \
