@@ -410,11 +410,11 @@ foreach my $test( @$tests )
 if( scalar( @children ) > 0 )
 {
     kill 'TERM', @children;
-    #sleep( 1 );
-    #kill 'KILL', @children;
+#    sleep( 1 );
+#    kill 'KILL', @children;
 }
 
-my $result = `ps aux | grep "[e]vent_manager\s+" | awk '{ print \$2 }'`;
+my $result = `ps aux | grep "[e]vent_manager " | awk '{ print \$2 }'`;
 
 foreach my $pid( split( "\n", $result ) )
 {

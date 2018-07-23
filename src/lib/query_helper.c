@@ -468,6 +468,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             "Root element of JSON response is not an object"
         );
         _free_query( query_obj );
+        free( json_tokens );
         return NULL;
     }
 
@@ -485,6 +486,7 @@ struct query * _add_json_parameter_to_query( struct query * query_obj, char * js
             max_tokens
         );
         _free_query( query_obj );
+        free( json_tokens );
         return NULL;
     }
 

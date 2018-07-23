@@ -31,6 +31,7 @@
 #include "lib/util.h"
 #include "lib/strings.h"
 #include "lib/query_helper.h"
+#include "lib/jsmn/jsmn.h"
 
 /* Constants */
 #define MAX_CONN_RETRIES 3
@@ -89,6 +90,8 @@ bool is_column_null( int, PGresult *, char * );
 bool _rollback_transaction( void );
 bool _commit_transaction( void );
 bool _begin_transaction( void );
+void set_session_gucs( char * );
+void clear_session_gucs( char * );
 
 // Integration functions
 void _cyanaudit_integration( char * );
@@ -486,6 +489,7 @@ int event_queue_handler( void )
     new                    = get_column_value( 0, result, "new" );
     session_values         = get_column_value( 0, result, "session_values" );
 
+    set_session_gucs( session_values );
     work_item_query_obj = _new_query( work_item_query );
 
     work_item_query_obj = _add_parameter_to_query(
@@ -638,6 +642,8 @@ int event_queue_handler( void )
     }
 
     PQclear( delete_result );
+    clear_session_gucs( session_values );
+    
     if( _commit_transaction() == false )
     {
         // Lets just hope the tx entered an aborted state
@@ -1117,6 +1123,7 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
         return false;
     }
 
+    set_session_gucs( session_values );
     action_query = _add_parameter_to_query( action_query, "uid", uid );
     action_query = _add_parameter_to_query( action_query, "recorded", recorded );
     action_query = _add_parameter_to_query( action_query, "transaction_label", transaction_label );
@@ -1168,7 +1175,7 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
     }
 
     PQclear( action_result );
-
+    clear_session_gucs( session_values );
     return true;
 }
 
@@ -1606,4 +1613,299 @@ int main( int argc, char ** argv )
     }
 
     return 0;
+}
+
+void set_session_gucs( char * session_gucs )
+{
+    PGresult *  result           = NULL;
+    jsmntok_t * json_tokens      = NULL;
+    jsmntok_t   json_key_token   = {0};
+    jsmntok_t   json_value_token = {0};
+    char *      key              = NULL;
+    char *      value            = NULL;
+    char *      params[2]        = {NULL};
+    int         i                = 0;
+    int         max_tokens       = 0;
+
+    if( session_gucs == NULL || strlen( session_gucs ) == 0 )
+    {
+        return;
+    }
+
+    json_tokens = json_tokenise( session_gucs, &max_tokens );
+
+    if( json_tokens == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to parse session GUC strings"
+        );
+        return;
+    }
+
+    if( json_tokens[0].type != JSMN_OBJECT )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Root element of session GUCs structure is not an object"
+        );
+
+        free( json_tokens );
+        return;
+    }
+
+    if( max_tokens < 3 )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Received empty JSON object for session_gucs"
+        );
+        return;
+    }
+
+    i = 1;
+    for(;;)
+    {
+        json_key_token = json_tokens[i];
+
+        if( json_key_token.type != JSMN_STRING )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Expected string key in JSON structure for session_gucs (got %d at index %d)",
+                json_key_token.type,
+                i
+            );
+
+            free( json_tokens );
+            return;
+        }
+
+        key = ( char * ) calloc(
+            ( json_key_token.end - json_key_token.start + 1 ),
+            sizeof( char )
+        );
+
+        if( key == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for JSON key string"
+            );
+
+            free( json_tokens );
+            return;
+        }
+
+        strncat(
+            key,
+            ( char * ) ( session_gucs + json_key_token.start ),
+            json_key_token.end - json_key_token.start
+        );
+
+        key[json_key_token.end - json_key_token.start] = '\0';
+        i++;
+
+        if( i >= max_tokens )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Reached unexpected end of JSON object"
+            );
+            free( key );
+            free( json_tokens );
+            return;
+        }
+
+        json_value_token = json_tokens[i];
+
+        value = ( char * ) calloc(
+            ( json_value_token.end - json_value_token.start + 1 ),
+            sizeof( char )
+        );
+
+        if( value == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for JSON value string"
+            );
+
+            free( key );
+            free( json_tokens );
+            return;
+        }
+
+        strncpy(
+            value,
+            ( char * ) ( session_gucs + json_value_token.start ),
+            json_value_token.end - json_value_token.start
+        );
+
+        value[json_value_token.end - json_value_token.start] = '\0';
+
+        if( strcmp( value, "null" ) == 0 || strcmp( value, "NULL" ) == 0 )
+        {
+            free( value );
+            value = NULL;
+        }
+
+        params[0] = key;
+        params[1] = value;
+        result = _execute_query(
+            ( char * ) set_guc,
+            params,
+            2,
+            true
+        );
+
+        if( result == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to execute set_guc query"
+            );
+
+            _rollback_transaction();
+            return;
+        }
+
+        PQclear( result );
+        _log( LOG_LEVEL_DEBUG, "Found session_guc kv pair: %s:%s", key, value );
+        free( key );
+        if( value != NULL )
+        {
+            free( value );
+        }
+
+        if( i >= ( max_tokens - 1 ) )
+        {
+            break;
+        }
+
+        i++;
+    }
+
+    return;
+}
+
+void clear_session_gucs( char * session_gucs )
+{
+    PGresult *  result           = NULL;
+    jsmntok_t * json_tokens      = NULL;
+    jsmntok_t   json_key_token   = {0};
+    char *      key              = NULL;
+    char *      params[1]        = {NULL};
+    int         i                = 0;
+    int         max_tokens       = 0;
+
+    if( session_gucs == NULL || strlen( session_gucs ) == 0 )
+    {
+        return;
+    }
+
+    json_tokens = json_tokenise( session_gucs, &max_tokens );
+
+    if( json_tokens == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to parse session GUC strings"
+        );
+        return;
+    }
+
+    if( json_tokens[0].type != JSMN_OBJECT )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Root element of session GUCs structure is not an object"
+        );
+
+        free( json_tokens );
+        return;
+    }
+
+    if( max_tokens < 3 )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Received empty JSON object for session_gucs"
+        );
+        return;
+    }
+
+    i = 1;
+    for(;;)
+    {
+        json_key_token = json_tokens[i];
+
+        if( json_key_token.type != JSMN_STRING )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Expected string key in JSON structure for session_gucs (got %d at index %d)",
+                json_key_token.type,
+                i
+            );
+
+            free( json_tokens );
+            return;
+        }
+
+        key = ( char * ) calloc(
+            ( json_key_token.end - json_key_token.start + 1 ),
+            sizeof( char )
+        );
+
+        if( key == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory for JSON key string"
+            );
+
+            free( json_tokens );
+            return;
+        }
+
+        strncat(
+            key,
+            ( char * ) ( session_gucs + json_key_token.start ),
+            json_key_token.end - json_key_token.start
+        );
+
+        key[json_key_token.end - json_key_token.start] = '\0';
+        i = i + 2;
+
+        params[0] = key;
+        result = _execute_query(
+            ( char * ) clear_guc,
+            params,
+            1,
+            true
+        );
+
+        if( result == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to execute set_guc query"
+            );
+
+            _rollback_transaction();
+            return;
+        }
+
+        PQclear( result );
+        free( key );
+
+        if( i >= ( max_tokens - 1 ) )
+        {
+            break;
+        }
+
+    }
+
+    return;
 }

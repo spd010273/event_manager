@@ -67,7 +67,7 @@ static const char * get_work_queue_item = "\
                 a.uri, \
                 '__BASE_URL__', \
                 COALESCE( \
-                    wq.session_values->>'" EXTENSION_NAME ".base_url', TRUE ), \
+                    wq.session_values->>'" EXTENSION_NAME ".base_url', \
                     current_setting( '" EXTENSION_NAME ".base_url', TRUE ), \
                     'localhost' \
                 ) \
@@ -136,4 +136,11 @@ INNER JOIN pg_namespace n \
 
 static const char * cyanaudit_label_tx = "\
     SELECT cyanaudit.fn_label_last_transaction( $1 )";
+
+static const char * set_guc = "\
+    SELECT set_config( $1, $2, TRUE )";
+
+static const char * clear_guc = "\
+    SELECT set_config( $1, NULL, TRUE )";
+
 #endif
