@@ -40,8 +40,8 @@ void _queue_loop( const char *, int (*)(void) );
 int work_queue_handler( void );
 int event_queue_handler( void );
 bool execute_action( PGresult *, int );
-bool execute_action_query( struct action_result );
-bool execute_remote_uri_call( struct action_result );
+bool execute_action_query( struct action_result * );
+bool execute_remote_uri_call( struct action_result * );
 bool set_uid( char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 

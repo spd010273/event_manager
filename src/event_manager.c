@@ -675,6 +675,8 @@ int event_queue_handler( void )
         9
     );
 
+    // Clear GUCs prior to freeing result handle
+    clear_session_gucs( session_values );
     PQclear( result );
     PQclear( work_item_result );
 
@@ -689,7 +691,6 @@ int event_queue_handler( void )
     }
 
     PQclear( delete_result );
-    clear_session_gucs( session_values );
 
     if( _commit_transaction() == false )
     {
@@ -965,21 +966,21 @@ static size_t _curl_write_callback(
 }
 
 /*
- * bool execute_remote_uri_call( struct action_result )
+ * bool execute_remote_uri_call( struct action_result * )
  *     Uses CuRL to execute a remote POST, PUT, or GET request over HTTP/HTTPS
  *
  * Arguments:
- *     struct action_result action: All available information on the action to
- *                                  be executed.
+ *     struct action_result * action: All available information on the action to
+ *                                    be executed.
  * Return:
- *     - bool is_success:           True if the call happened without error,
- *                                  false otherwise.
+ *     - bool is_success:             True if the call happened without error,
+ *                                    false otherwise.
  * Error Conditions:
  *     - Emits error upon failure to allocate memory.
  *     - Emits error when unsupported method passed as argument.
  *     - Can emit CuRL errors / warnings.
  */
-bool execute_remote_uri_call( struct action_result action )
+bool execute_remote_uri_call( struct action_result * action )
 {
     struct curl_response write_buffer = {0};
     CURLcode response                 = {0};
@@ -999,7 +1000,7 @@ bool execute_remote_uri_call( struct action_result action )
         return false;
     }
 
-    if( strcmp( action.method, "GET" ) == 0 )
+    if( strcmp( action->method, "GET" ) == 0 )
     {
         strcpy( param_list, "?" );
     }
@@ -1007,11 +1008,11 @@ bool execute_remote_uri_call( struct action_result action )
     param_list = _add_json_parameters_to_param_list(
         curl_handle,
         param_list,
-        action.parameters,
+        action->parameters,
         &malloc_size
     );
 
-    if( action.static_parameters != NULL )
+    if( action->static_parameters != NULL )
     {
         malloc_size++;
         param_list = ( char * ) realloc( param_list, malloc_size );
@@ -1031,7 +1032,7 @@ bool execute_remote_uri_call( struct action_result action )
         param_list = _add_json_parameters_to_param_list(
             curl_handle,
             param_list,
-            action.static_parameters,
+            action->static_parameters,
             &malloc_size
         );
 
@@ -1045,7 +1046,7 @@ bool execute_remote_uri_call( struct action_result action )
         }
     }
 
-    if( action.session_values != NULL )
+    if( action->session_values != NULL )
     {
         malloc_size++;
         param_list = ( char * ) realloc( param_list, malloc_size );
@@ -1065,7 +1066,7 @@ bool execute_remote_uri_call( struct action_result action )
         param_list = _add_json_parameters_to_param_list(
             curl_handle,
             param_list,
-            action.session_values,
+            action->session_values,
             &malloc_size
         );
 
@@ -1087,20 +1088,20 @@ bool execute_remote_uri_call( struct action_result action )
         _log(
             LOG_LEVEL_DEBUG,
             "Curl is enabled, setting method to %s",
-            action.method
+            action->method
         );
 
-        if( strcmp( action.method, "GET" ) == 0 )
+        if( strcmp( action->method, "GET" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting GET method" );
             response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1 );
         }
-        else if( strcmp( action.method, "PUT" ) == 0 )
+        else if( strcmp( action->method, "PUT" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
             response = curl_easy_setopt( curl_handle, CURLOPT_PUT, 1 );
         }
-        else if( strcmp( action.method, "POST" ) == 0 )
+        else if( strcmp( action->method, "POST" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting POST method" );
             response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1 );
@@ -1110,7 +1111,7 @@ bool execute_remote_uri_call( struct action_result action )
             _log(
                 LOG_LEVEL_ERROR,
                 "Unsupported method: %s",
-                action.method
+                action->method
             );
 
             return false;
@@ -1130,11 +1131,11 @@ bool execute_remote_uri_call( struct action_result action )
         write_buffer.pointer = malloc( 1 );
         write_buffer.size = 0;
 
-        if( strcmp( action.method, "GET" ) == 0 )
+        if( strcmp( action->method, "GET" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
             remote_call = ( char * ) calloc(
-                ( strlen( action.uri ) + strlen( param_list ) + 1 ),
+                ( strlen( action->uri ) + strlen( param_list ) + 1 ),
                 sizeof( char )
             );
 
@@ -1149,7 +1150,7 @@ bool execute_remote_uri_call( struct action_result action )
                 return false;
             }
 
-            strcpy( remote_call, action.uri );
+            strcpy( remote_call, action->uri );
             strcat( remote_call, param_list );
 
             _log(
@@ -1161,7 +1162,7 @@ bool execute_remote_uri_call( struct action_result action )
         else
         {
             // Set post fields for PUT / POST
-            remote_call = action.uri;
+            remote_call = action->uri;
             curl_easy_setopt(
                 curl_handle,
                 CURLOPT_POSTFIELDS,
@@ -1169,7 +1170,7 @@ bool execute_remote_uri_call( struct action_result action )
             );
         }
 
-        if( action.use_ssl )
+        if( action->use_ssl )
         {
             response = curl_easy_setopt(
                 curl_handle,
@@ -1202,7 +1203,7 @@ bool execute_remote_uri_call( struct action_result action )
             _log(
                 LOG_LEVEL_DEBUG,
                 "Making %s call with param list %s",
-                action.method,
+                action->method,
                 param_list
             );
             response = curl_easy_perform( curl_handle );
@@ -1215,13 +1216,13 @@ bool execute_remote_uri_call( struct action_result action )
             _log(
                 LOG_LEVEL_ERROR,
                 "Failed %s %s: %s",
-                action.method,
+                action->method,
                 remote_call,
                 curl_easy_strerror( response )
             );
 
             free( write_buffer.pointer );
-            if( strcmp( action.method, "GET" ) == 0 )
+            if( strcmp( action->method, "GET" ) == 0 )
             {
                 free( remote_call );
             }
@@ -1236,7 +1237,7 @@ bool execute_remote_uri_call( struct action_result action )
 
         free( write_buffer.pointer );
 
-        if( strcmp( action.method, "GET" ) == 0 )
+        if( strcmp( action->method, "GET" ) == 0 )
         {
             free( remote_call );
         }
@@ -1251,7 +1252,7 @@ bool execute_remote_uri_call( struct action_result action )
             remote_call
         );
 
-        if( strcmp( action.method, "GET" ) == 0 )
+        if( strcmp( action->method, "GET" ) == 0 )
         {
             free( remote_call );
         }
@@ -1259,7 +1260,7 @@ bool execute_remote_uri_call( struct action_result action )
         return false;
     }
 
-    if( strcmp( action.method, "GET" ) == 0 )
+    if( strcmp( action->method, "GET" ) == 0 )
     {
         free( remote_call );
     }
@@ -1268,25 +1269,25 @@ bool execute_remote_uri_call( struct action_result action )
 }
 
 /*
- * bool execute_action_query( struct action_result )
+ * bool execute_action_query( struct action_result * )
  *     executes an action query
  *
  * Arguments:
- *     struct action_result: All available information related to the action to
- *                           be executed.
+ *     struct action_result *: All available information related to the action to
+ *                             be executed.
  * Return:
- *     bool is_success:      true if the transaction completed successfully,
- *                           false otherwise.
+ *     bool is_success:        true if the transaction completed successfully,
+ *                             false otherwise.
  * Error Conditions:
  *     - Emit error on failure to allocate string memory.
  *     - Emit error on transaction failure
  */
-bool execute_action_query( struct action_result action )
+bool execute_action_query( struct action_result * action )
 {
     PGresult * action_result;
     struct query * action_query;
 
-    action_query = _new_query( action.query );
+    action_query = _new_query( action->query );
 
     if( action_query == NULL )
     {
@@ -1297,49 +1298,49 @@ bool execute_action_query( struct action_result action )
         return false;
     }
 
-    set_session_gucs( action.session_values );
+    set_session_gucs( action->session_values );
     action_query = _add_parameter_to_query(
         action_query,
         "uid",
-        action.uid
+        action->uid
     );
 
     action_query = _add_parameter_to_query(
         action_query,
         "recorded",
-        action.recorded
+        action->recorded
     );
 
     action_query = _add_parameter_to_query(
         action_query,
         "transaction_label",
-        action.transaction_label
+        action->transaction_label
     );
 
-    _log( LOG_LEVEL_DEBUG, "PARAMS: %s", action.parameters );
+    _log( LOG_LEVEL_DEBUG, "PARAMS: %s", action->parameters );
 
     action_query = _add_json_parameter_to_query(
         action_query,
-        action.parameters,
+        action->parameters,
         ( char * ) NULL
     );
 
     action_query = _add_json_parameter_to_query(
         action_query,
-        action.static_parameters,
+        action->static_parameters,
         ( char * ) NULL
     );
 
     action_query = _add_json_parameter_to_query(
         action_query,
-        action.session_values,
+        action->session_values,
         ( char * ) NULL
     );
 
     action_query = _finalize_query( action_query );
 
     // Set UID
-    set_uid( action.uid, action.session_values );
+    set_uid( action->uid, action->session_values );
 
     if( action_query == NULL )
     {
@@ -1378,8 +1379,8 @@ bool execute_action_query( struct action_result action )
         return false;
     }
 
+    clear_session_gucs( action->session_values );
     PQclear( action_result );
-    clear_session_gucs( action.session_values );
     return true;
 }
 
@@ -1402,8 +1403,10 @@ bool execute_action( PGresult * result, int row )
 {
     bool   execute_action_result = false;
     struct action_result action  = {0};
+    struct action_result * action_ptr = NULL;
     char * use_ssl = NULL;
 
+    action_ptr               = &action;
     action.parameters        = get_column_value( row, result, "parameters" );
     action.uid               = get_column_value( row, result, "uid" );
     action.recorded          = get_column_value( row, result, "recorded" );
@@ -1442,7 +1445,7 @@ bool execute_action( PGresult * result, int row )
             "Executing action query"
         );
 
-        execute_action_result = execute_action_query( action );
+        execute_action_result = execute_action_query( action_ptr );
 
         if( execute_action_result == true && cyanaudit_installed == true )
         {
@@ -1456,7 +1459,7 @@ bool execute_action( PGresult * result, int row )
             "Executing API call"
         );
 
-        execute_action_result = execute_remote_uri_call( action );
+        execute_action_result = execute_remote_uri_call( action_ptr );
     }
     else
     {
@@ -2024,6 +2027,7 @@ void set_session_gucs( char * session_gucs )
             LOG_LEVEL_WARNING,
             "Received empty JSON object for session_gucs"
         );
+        free( json_tokens );
         return;
     }
 
@@ -2131,6 +2135,12 @@ void set_session_gucs( char * session_gucs )
             );
 
             _rollback_transaction();
+            free( key );
+            if( value != NULL )
+            {
+                free( value );
+            }
+            free( json_tokens );
             return;
         }
 
@@ -2150,6 +2160,7 @@ void set_session_gucs( char * session_gucs )
         i++;
     }
 
+    free( json_tokens );
     return;
 }
 
@@ -2212,6 +2223,7 @@ void clear_session_gucs( char * session_gucs )
             LOG_LEVEL_WARNING,
             "Received empty JSON object for session_gucs"
         );
+        free( json_tokens );
         return;
     }
 
@@ -2272,7 +2284,8 @@ void clear_session_gucs( char * session_gucs )
                 LOG_LEVEL_ERROR,
                 "Failed to execute set_guc query"
             );
-
+            free( json_tokens );
+            free( key );
             _rollback_transaction();
             return;
         }
@@ -2287,5 +2300,6 @@ void clear_session_gucs( char * session_gucs )
 
     }
 
+    free( json_tokens );
     return;
 }

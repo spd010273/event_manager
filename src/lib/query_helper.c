@@ -752,6 +752,8 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
             json_string,
             max_tokens
         );
+
+        free( json_tokens );
         return NULL;
     }
 
@@ -840,6 +842,7 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
                 "Failed to allocate memory for URL encoding operation"
             );
             free( json_tokens );
+            free( param_list );
             return NULL;
         }
 
@@ -865,6 +868,7 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
                 "URL Encoding operation failed"
             );
             free( json_tokens );
+            free( param_list );
             return NULL;
         }
 
@@ -881,6 +885,7 @@ char * _add_json_parameters_to_param_list( CURL * curl_handle, char * param_list
                 "Failed to reallocate memory for parameter string value"
             );
             free( json_tokens );
+            free( param_list );
             curl_free( encoded_value );
             return NULL;
         }
