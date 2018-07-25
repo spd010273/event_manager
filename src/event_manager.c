@@ -541,55 +541,55 @@ int event_queue_handler( void )
     set_session_gucs( session_values );
     work_item_query_obj = _new_query( work_item_query );
 
-    work_item_query_obj = _add_parameter_to_query(
+    _add_parameter_to_query(
         work_item_query_obj,
         "event_table_work_item",
         event_table_work_item
     );
 
-    work_item_query_obj = _add_parameter_to_query(
+    _add_parameter_to_query(
         work_item_query_obj,
         "uid",
         uid
     );
 
-    work_item_query_obj = _add_parameter_to_query(
+    _add_parameter_to_query(
         work_item_query_obj,
         "op",
         op
     );
 
-    work_item_query_obj = _add_parameter_to_query(
+    _add_parameter_to_query(
         work_item_query_obj,
         "pk_value",
         pk_value
     );
 
-    work_item_query_obj = _add_parameter_to_query(
+    _add_parameter_to_query(
         work_item_query_obj,
         "recorded",
         recorded
     );
 
-    work_item_query_obj = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         work_item_query_obj,
         new,
         "NEW."
     );
 
-    work_item_query_obj = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         work_item_query_obj,
         old,
         "OLD."
     );
 
-    work_item_query_obj = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         work_item_query_obj,
         session_values,
         ( char * ) NULL
     );
 
-    work_item_query_obj = _finalize_query( work_item_query_obj );
+    _finalize_query( work_item_query_obj );
 
     if( work_item_query_obj == NULL )
     {
@@ -1005,7 +1005,7 @@ bool execute_remote_uri_call( struct action_result * action )
         strcpy( param_list, "?" );
     }
 
-    param_list = _add_json_parameters_to_param_list(
+    _add_json_parameters_to_param_list(
         curl_handle,
         param_list,
         action->parameters,
@@ -1029,7 +1029,7 @@ bool execute_remote_uri_call( struct action_result * action )
 
         strcat( param_list, "&" );
 
-        param_list = _add_json_parameters_to_param_list(
+        _add_json_parameters_to_param_list(
             curl_handle,
             param_list,
             action->static_parameters,
@@ -1063,7 +1063,7 @@ bool execute_remote_uri_call( struct action_result * action )
 
         strcat( param_list, "&" );
 
-        param_list = _add_json_parameters_to_param_list(
+        _add_json_parameters_to_param_list(
             curl_handle,
             param_list,
             action->session_values,
@@ -1299,19 +1299,19 @@ bool execute_action_query( struct action_result * action )
     }
 
     set_session_gucs( action->session_values );
-    action_query = _add_parameter_to_query(
+    _add_parameter_to_query(
         action_query,
         "uid",
         action->uid
     );
 
-    action_query = _add_parameter_to_query(
+    _add_parameter_to_query(
         action_query,
         "recorded",
         action->recorded
     );
 
-    action_query = _add_parameter_to_query(
+    _add_parameter_to_query(
         action_query,
         "transaction_label",
         action->transaction_label
@@ -1319,25 +1319,25 @@ bool execute_action_query( struct action_result * action )
 
     _log( LOG_LEVEL_DEBUG, "PARAMS: %s", action->parameters );
 
-    action_query = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         action_query,
         action->parameters,
         ( char * ) NULL
     );
 
-    action_query = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         action_query,
         action->static_parameters,
         ( char * ) NULL
     );
 
-    action_query = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         action_query,
         action->session_values,
         ( char * ) NULL
     );
 
-    action_query = _finalize_query( action_query );
+    _finalize_query( action_query );
 
     // Set UID
     set_uid( action->uid, action->session_values );
@@ -1725,19 +1725,19 @@ bool set_uid( char * uid, char * session_values )
     set_uid_query_obj = _new_query( set_uid_query );
     free( set_uid_query );
 
-    set_uid_query_obj = _add_parameter_to_query(
+    _add_parameter_to_query(
         set_uid_query_obj,
         "uid",
         uid
     );
 
-    set_uid_query_obj = _add_json_parameter_to_query(
+    _add_json_parameter_to_query(
         set_uid_query_obj,
         session_values,
         ( char * ) NULL
     );
 
-    set_uid_query_obj = _finalize_query( set_uid_query_obj );
+    _finalize_query( set_uid_query_obj );
 
     if( set_uid_query_obj == NULL )
     {

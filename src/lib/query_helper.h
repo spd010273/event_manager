@@ -23,12 +23,12 @@ struct query {
 };
 
 struct query * _new_query( char * );
-struct query * _finalize_query( struct query * );
-struct query * _add_parameter_to_query( struct query *, char *, char * );
-struct query * _add_json_parameter_to_query( struct query *, char *, char * );
+void _finalize_query( struct query * );
+void _add_parameter_to_query( struct query *, char *, char * );
+void _add_json_parameter_to_query( struct query *, char *, char * );
 void _free_query( struct query * );
 void _debug_struct( struct query * );
 jsmntok_t * json_tokenise( char *, int * );
-char * _add_json_parameters_to_param_list( CURL *, char *, char *, int * );
+void _add_json_parameters_to_param_list( CURL *, char *, char *, int * );
 
 #endif
