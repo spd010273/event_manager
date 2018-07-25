@@ -28,6 +28,7 @@
 #include <signal.h>
 
 #include <curl/curl.h>
+#include "event_manager.h"
 #include "lib/util.h"
 #include "lib/strings.h"
 #include "lib/query_helper.h"
@@ -62,49 +63,31 @@ bool     enable_curl         = false;
 CURL *   curl_handle         = NULL;
 bool     tx_in_progress      = false;
 
+// Flags
 sig_atomic_t got_sighup  = false;
 sig_atomic_t got_sigterm = false;
 
-
-// Structures
-struct curl_response {
-    char * pointer;
-    size_t size;
-};
-
-/* Function Prototypes */
-
-// Main functions
-void _queue_loop( const char *, int (*)(void) );
-int work_queue_handler( void );
-int event_queue_handler( void );
-bool execute_action( PGresult *, int );
-bool execute_action_query( char *, char *, char *, char *, char *, char *, char * );
-bool execute_remote_uri_call( char *, char *, char *, char *, bool, char * );
-bool set_uid( char *, char * );
-static size_t _curl_write_callback( void *, size_t, size_t, void * );
-
-// Helper functions
-PGresult * _execute_query( char *, char **, int );
-char * get_column_value( int, PGresult *, char * );
-bool is_column_null( int, PGresult *, char * );
-bool _rollback_transaction( void );
-bool _commit_transaction( void );
-bool _begin_transaction( void );
-void set_session_gucs( char * );
-void clear_session_gucs( char * );
-
-// Integration functions
-void _cyanaudit_integration( char * );
-
-// Signal Handlers
-void __sigterm( int ) __attribute__ ((noreturn));
-void __sighup( int );
-
-// Program Entry
-int main( int, char ** );
-
 /* Functions */
+
+/*
+ * PGresult * _execute_query( char * query, char ** params, int param_count )
+ *     Executes a given query. Has handlers present for:
+ *         DB connection interruptions
+ *         SQL command termination by administrator
+ *         Error handling
+ *
+ * Arguments:
+ *     - char * query:    SQL query string to execute.
+ *     - char ** params:  Optional parameter list to be bound into the query.
+ *     - int param_count: Length of above structure.
+ * Return:
+ *     PGresult * result: Result handle of the executed query.
+ * Error Conditions:
+ *     - Returns NULL on error.
+ *     - Emits error on failure to execute query.
+ *     - Emits error on disconnection of DB handle.
+ *     - Emits error on syntax or improper termination of query.
+ */
 PGresult * _execute_query( char * query, char ** params, int param_count )
 {
     PGresult * result            = NULL;
@@ -156,7 +139,8 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
         {
             _log(
                 LOG_LEVEL_ERROR,
-                "Failed to connect to DB server (%s), while in a transaction. Transaction was automatically aborted",
+                "Failed to connect to DB server (%s), while in a transaction."
+                "Transaction was automatically aborted",
                 PQerrorMessage( conn )
             );
             tx_in_progress = false;
@@ -176,7 +160,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
         );
 
         retry_counter++;
-        last_backoff_time = (int) ( 10 * (rand() / RAND_MAX) ) + last_backoff_time;
+        last_backoff_time = (int) ( 10 * ( rand() / RAND_MAX ) ) + last_backoff_time;
 
         if( conn != NULL )
         {
@@ -271,20 +255,20 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
 
 /*
  * void _queue_loop( const char * channel, int (*dequeue_function)(void) )
- *     Listens to the specified channel for asynchronous notifications, calling the
- *     dequeue_function when a new queue item is present
+ *     Listens to the specified channel for asynchronous notifications, calling
+ *     the dequeue_function when a new queue item is present.
  *
  * Arguments:
- *     - const char * channel: channel on which the LISTEN command should be issued
+ *     - const char * channel:          Channel on which the LISTEN command
+ *                                      should be issued.
  *     - int (*dequeue_function)(void): pointer to the subroutine that handles a
- *       NOTIFY issued on this channel
+ *                                      NOTIFY issued on this channel.
  * Return:
  *     None
  * Error conditions:
- *     - Exits program on failure to allocate string memory
- *     - Emits error when listen channel cannot be bound with select()
- *     - Emits error when a SIGTERM is received
- *
+ *     - Exits program on failure to allocate string memory.
+ *     - Emits error when listen channel cannot be bound with select().
+ *     - Emits error when a SIGTERM is received.
  */
 void _queue_loop( const char * channel, int (*dequeue_function)(void) )
 {
@@ -292,6 +276,28 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
     char *     listen_command  = NULL;
     PGresult * listen_result   = NULL;
     int        processed_count = 0;
+
+    // Check queue prior to entering main loop
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Processing queue entries prior to entering main loop"
+    );
+
+    while( (*dequeue_function)() > 0 )
+    {
+        processed_count++;
+    }
+
+    if( processed_count > 0 )
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Processed %d queue entries prior to main loop",
+            processed_count
+        );
+
+        processed_count = 0;
+    }
 
     listen_command = ( char * ) calloc(
         ( strlen( channel ) + 10 ),
@@ -428,14 +434,16 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
 
 /*
  * int event_queue_handle( void )
- *     Handles new entries in event_manager.tb_event_queue
+ *     Handles new entries in event_manager.tb_event_queue.
  *
  * Arguments:
  *     None
  * Return:
- *     rows_processed: 1 when a queue entry is successfully processed, 0 otherwise
+ *     int rows_processed: 1 when a queue entry is successfully processed,
+ *                         0 otherwise.
  * Error Conditions:
- *     - Emits error when a transaction fails to BEGIN, COMMIT or ROLLBACK (when necessary)
+ *     - Emits error when a transaction fails to BEGIN, COMMIT or
+ *       ROLLBACK (when necessary)
  *     - Emits error upon failure to allocate string memory
  *     - Emits error when a critical section step fails, including:
  *              - Queue item dequeue
@@ -445,7 +453,6 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
  *              - Deletion of dequeued queue item
  *              - commit of transaction
  */
-
 int event_queue_handler( void )
 {
     PGresult * result           = NULL;
@@ -650,7 +657,8 @@ int event_queue_handler( void )
         PQclear( insert_result );
     }
 
-    // Get result from work item query, place into JSONB object and insert into work queue
+    // Get result from work item query, place into JSONB object and insert
+    //  into work queue
     params[0] = event_table_work_item;
     params[1] = uid;
     params[2] = recorded;
@@ -685,7 +693,6 @@ int event_queue_handler( void )
 
     if( _commit_transaction() == false )
     {
-        // Lets just hope the tx entered an aborted state
         _log(
             LOG_LEVEL_ERROR,
             "Failed to commit event queue transaction"
@@ -704,10 +711,11 @@ int event_queue_handler( void )
  * Arguments:
  *     None
  * Return:
- *     rows_processed: number of queue entries processed, 0 otherwise
+ *     int rows_processed: number of queue entries processed, 0 otherwise.
  * Error Conditions:
- *     - Emits error when a transaction fails to BEGIN, COMMIT or ROLLBACK (when necessary)
- *     - Emits error upon failure to allocate string memory
+ *     - Emits error when a transaction fails to BEGIN, COMMIT or ROLLBACK
+ *       (when necessary).
+ *     - Emits error upon failure to allocate string memory.
  *     - Emits error when a critical section step fails, including:
  *              - Queue item dequeue
  *              - Queue item processing (action preparation)
@@ -835,13 +843,14 @@ int work_queue_handler( void )
  *    libpq wrapper for PQgetvalue for code simplification.
  *
  * Arguments:
- *     - int row: the row number to get the column value from
- *     - PGresult * result: The libpq result handle of a previously executed query where the
- *       results are present
- *     - char * column_name: the name of the column which contains the value indexed by row
+ *     - int row:            the row number to get the column value from.
+ *     - PGresult * result:  The libpq result handle of a previously executed
+ *                           query where the results are present.
+ *     - char * column_name: the name of the column which contains the value
+ *                           indexed by row.
  * Return:
- *     char * column_value: The string representation of the value of the column. NULL results
- *     are returned as ANSI C NULL
+ *     char * column_value:  The string representation of the value of the column.
+ *                           NULL results are returned as ANSI C NULL.
  * Error Conditions:
  *     None - may emit libpq errors or warnings
  */
@@ -867,12 +876,12 @@ char * get_column_value( int row, PGresult * result, char * column_name )
  *     checks the specified row/column for NULL
  *
  * Arguments:
- *    - int row: the row number of the value to check
- *    - PGresult * result: The libpq result handle of a previously executed query
- *    - char * column_name: the name of the column which contains the to-be-checked value
- *      indexed by row
+ *    - int row:            The row number of the value to check.
+ *    - PGresult * result:  The libpq result handle of a previously executed query.
+ *    - char * column_name: the name of the column which contains the
+ *                          to-be-checked value indexed by row.
  * Return:
- *    - bool is_null: true if the row/column value is null, false otherwise
+ *    - bool is_null:       true if the row/column value is null, false otherwise.
  * Error Conditions:
  *    None - may emit libpq errors or warnings
  */
@@ -895,20 +904,31 @@ bool is_column_null( int row, PGresult * result, char * column_name )
 }
 
 /*
- * static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b, void * user_p )
- *     callback handler which stores CuRL results into the curl_response buffer struct
+ * static size_t _curl_write_callback(
+ *     void * contents,
+ *     size_t size,
+ *     size_t n_mem_b,
+ *     void * user_p
+ * )
+ *     callback handler which stores CuRL results into the curl_response
+ *     buffer struct.
  *
  * Arguments:
- *     - void * contents: response contents from curl call
- *     - size_t size: response contents size (length)
- *     - size_t n_mem_b: number of bytes of the response
- *     - void * user_p: pointer to buffer struct
+ *     - void * contents:  Response contents from curl call.
+ *     - size_t size:      Response contents size (length).
+ *     - size_t n_mem_b:   Number of bytes of the response.
+ *     - void * user_p:    Pointer to buffer struct.
  * Return:
- *     - size_t real_size: Size in allocated bytes of the buffer size increase
+ *     - size_t real_size: Size in allocated bytes of the buffer size increase.
  * Error Conditions:
- *     - Emits error on failure to allocate memory for buffer
+ *     - Emits error on failure to allocate memory for buffer.
  */
-static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b, void * user_p )
+static size_t _curl_write_callback(
+    void * contents,
+    size_t size,
+    size_t n_mem_b,
+    void * user_p
+)
 {
     size_t real_size                     = 0;
     struct curl_response * response_page = NULL;
@@ -932,7 +952,12 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
         return 0;
     }
 
-    memcpy( &( response_page->pointer[ response_page->size ] ), contents, real_size );
+    memcpy(
+        &( response_page->pointer[ response_page->size ] ),
+        contents,
+        real_size
+    );
+
     response_page->size += real_size;
     response_page->pointer[response_page->size] = 0;
 
@@ -940,24 +965,21 @@ static size_t _curl_write_callback( void * contents, size_t size, size_t n_mem_b
 }
 
 /*
- * bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters, bool use_ssl, char * session_values )
+ * bool execute_remote_uri_call( struct action_result )
  *     Uses CuRL to execute a remote POST, PUT, or GET request over HTTP/HTTPS
  *
  * Arguments:
- *     - char * uri: URI endpoint of the call
- *     - char * static_parameters: Static parameters attached to the action being executed
- *     - char * method: Method used to make this call (PUT, POST, GET)
- *     - char * parameters: Parameters returned by work_item_query
- *     - bool use_ssl: whether SSL should be used for this connection
- *     - char * session_values: session GUCs copied from originating transaction
+ *     struct action_result action: All available information on the action to
+ *                                  be executed.
  * Return:
- *     - bool is_success: true if the call happened without error, false otherwise
+ *     - bool is_success:           True if the call happened without error,
+ *                                  false otherwise.
  * Error Conditions:
- *     - Emits error upon failure to allocate memory
- *     - Emits error when unsupported method passed as argument
- *     - Can emit CuRL errors / warnings
+ *     - Emits error upon failure to allocate memory.
+ *     - Emits error when unsupported method passed as argument.
+ *     - Can emit CuRL errors / warnings.
  */
-bool execute_remote_uri_call( char * uri, char * static_parameters, char * method, char * parameters, bool use_ssl, char * session_values )
+bool execute_remote_uri_call( struct action_result action )
 {
     struct curl_response write_buffer = {0};
     CURLcode response                 = {0};
@@ -977,14 +999,19 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         return false;
     }
 
-    if( strcmp( method, "GET" ) == 0 )
+    if( strcmp( action.method, "GET" ) == 0 )
     {
         strcpy( param_list, "?" );
     }
 
-    param_list = _add_json_parameters_to_param_list( curl_handle, param_list, parameters, &malloc_size );
+    param_list = _add_json_parameters_to_param_list(
+        curl_handle,
+        param_list,
+        action.parameters,
+        &malloc_size
+    );
 
-    if( static_parameters != NULL )
+    if( action.static_parameters != NULL )
     {
         malloc_size++;
         param_list = ( char * ) realloc( param_list, malloc_size );
@@ -993,14 +1020,20 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         {
             _log(
                 LOG_LEVEL_ERROR,
-                "Unable to allocate memory for simple string concatenation operation :("
+                "Unable to allocate memory for simple string "
+                "concatenation operation :("
             );
             return false;
         }
 
         strcat( param_list, "&" );
 
-        param_list = _add_json_parameters_to_param_list( curl_handle, param_list, static_parameters, &malloc_size );
+        param_list = _add_json_parameters_to_param_list(
+            curl_handle,
+            param_list,
+            action.static_parameters,
+            &malloc_size
+        );
 
         if( param_list == NULL )
         {
@@ -1012,7 +1045,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         }
     }
 
-    if( session_values != NULL )
+    if( action.session_values != NULL )
     {
         malloc_size++;
         param_list = ( char * ) realloc( param_list, malloc_size );
@@ -1021,14 +1054,20 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         {
             _log(
                 LOG_LEVEL_ERROR,
-                "Unable to allocate memory for simple string concatenation operation :("
+                "Unable to allocate memory for simple string"
+                "concatenation operation :("
             );
             return false;
         }
 
         strcat( param_list, "&" );
 
-        param_list = _add_json_parameters_to_param_list( curl_handle, param_list, session_values, &malloc_size );
+        param_list = _add_json_parameters_to_param_list(
+            curl_handle,
+            param_list,
+            action.session_values,
+            &malloc_size
+        );
 
         if( param_list == NULL )
         {
@@ -1045,18 +1084,23 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         //Get: CURLOPT_HTTPGET
         //Post: CURLOPT_POST
         //Put: CURLOPT_PUT
-        _log( LOG_LEVEL_DEBUG, "Curl is enabled, setting method to %s", method );
-        if( strcmp( method, "GET" ) == 0 )
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Curl is enabled, setting method to %s",
+            action.method
+        );
+
+        if( strcmp( action.method, "GET" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting GET method" );
             response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1 );
         }
-        else if( strcmp( method, "PUT" ) == 0 )
+        else if( strcmp( action.method, "PUT" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
             response = curl_easy_setopt( curl_handle, CURLOPT_PUT, 1 );
         }
-        else if( strcmp( method, "POST" ) == 0 )
+        else if( strcmp( action.method, "POST" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting POST method" );
             response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1 );
@@ -1066,7 +1110,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             _log(
                 LOG_LEVEL_ERROR,
                 "Unsupported method: %s",
-                method
+                action.method
             );
 
             return false;
@@ -1086,11 +1130,11 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         write_buffer.pointer = malloc( 1 );
         write_buffer.size = 0;
 
-        if( strcmp( method, "GET" ) == 0 )
+        if( strcmp( action.method, "GET" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
             remote_call = ( char * ) calloc(
-                ( strlen( uri ) + strlen( param_list ) + 1 ),
+                ( strlen( action.uri ) + strlen( param_list ) + 1 ),
                 sizeof( char )
             );
 
@@ -1105,7 +1149,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
                 return false;
             }
 
-            strcpy( remote_call, uri );
+            strcpy( remote_call, action.uri );
             strcat( remote_call, param_list );
 
             _log(
@@ -1117,7 +1161,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         else
         {
             // Set post fields for PUT / POST
-            remote_call = uri;
+            remote_call = action.uri;
             curl_easy_setopt(
                 curl_handle,
                 CURLOPT_POSTFIELDS,
@@ -1125,7 +1169,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             );
         }
 
-        if( use_ssl )
+        if( action.use_ssl )
         {
             response = curl_easy_setopt(
                 curl_handle,
@@ -1158,7 +1202,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             _log(
                 LOG_LEVEL_DEBUG,
                 "Making %s call with param list %s",
-                method,
+                action.method,
                 param_list
             );
             response = curl_easy_perform( curl_handle );
@@ -1171,13 +1215,13 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             _log(
                 LOG_LEVEL_ERROR,
                 "Failed %s %s: %s",
-                method,
+                action.method,
                 remote_call,
                 curl_easy_strerror( response )
             );
 
             free( write_buffer.pointer );
-            if( strcmp( method, "GET" ) == 0 )
+            if( strcmp( action.method, "GET" ) == 0 )
             {
                 free( remote_call );
             }
@@ -1192,7 +1236,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
 
         free( write_buffer.pointer );
 
-        if( strcmp( method, "GET" ) == 0 )
+        if( strcmp( action.method, "GET" ) == 0 )
         {
             free( remote_call );
         }
@@ -1207,7 +1251,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
             remote_call
         );
 
-        if( strcmp( method, "GET" ) == 0 )
+        if( strcmp( action.method, "GET" ) == 0 )
         {
             free( remote_call );
         }
@@ -1215,7 +1259,7 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
         return false;
     }
 
-    if( strcmp( method, "GET" ) == 0 )
+    if( strcmp( action.method, "GET" ) == 0 )
     {
         free( remote_call );
     }
@@ -1224,29 +1268,25 @@ bool execute_remote_uri_call( char * uri, char * static_parameters, char * metho
 }
 
 /*
- * bool execute_action_query( char * query, char * static_parameters, char * parameters, char * uid, char * recorded, char * transaction_label, char * session_values )
+ * bool execute_action_query( struct action_result )
  *     executes an action query
  *
  * Arguments:
- *     - char * query: action query to be executed
- *     - char * static_parameters: List of static parameters from the action entry
- *     - char * parameters: List of parameters generated by the work_item_query
- *     - char * uid: string representation of the initiating user's ID
- *     - char * recorded: string representation of the clock_timestamp() of the originating transaction
- *     - char * transaction_label: transaction label from the originating work_item entry
- *     - char * session_values: GUC values copied from the listed GUCs at event_manager.session_gucs
+ *     struct action_result: All available information related to the action to
+ *                           be executed.
  * Return:
- *     bool is_success: true if the transaction completed successfully, false otherwise
+ *     bool is_success:      true if the transaction completed successfully,
+ *                           false otherwise.
  * Error Conditions:
- *     - Emit error on failure to allocate string memory
+ *     - Emit error on failure to allocate string memory.
  *     - Emit error on transaction failure
  */
-bool execute_action_query( char * query, char * static_parameters, char * parameters, char * uid, char * recorded, char * transaction_label, char * session_values )
+bool execute_action_query( struct action_result action )
 {
     PGresult * action_result;
     struct query * action_query;
 
-    action_query = _new_query( query );
+    action_query = _new_query( action.query );
 
     if( action_query == NULL )
     {
@@ -1257,18 +1297,49 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
         return false;
     }
 
-    set_session_gucs( session_values );
-    action_query = _add_parameter_to_query( action_query, "uid", uid );
-    action_query = _add_parameter_to_query( action_query, "recorded", recorded );
-    action_query = _add_parameter_to_query( action_query, "transaction_label", transaction_label );
-    _log( LOG_LEVEL_DEBUG, "PARAMS: %s", parameters );
-    action_query = _add_json_parameter_to_query( action_query, parameters, ( char * ) NULL );
-    action_query = _add_json_parameter_to_query( action_query, static_parameters, ( char * ) NULL );
-    action_query = _add_json_parameter_to_query( action_query, session_values, ( char * ) NULL );
+    set_session_gucs( action.session_values );
+    action_query = _add_parameter_to_query(
+        action_query,
+        "uid",
+        action.uid
+    );
+
+    action_query = _add_parameter_to_query(
+        action_query,
+        "recorded",
+        action.recorded
+    );
+
+    action_query = _add_parameter_to_query(
+        action_query,
+        "transaction_label",
+        action.transaction_label
+    );
+
+    _log( LOG_LEVEL_DEBUG, "PARAMS: %s", action.parameters );
+
+    action_query = _add_json_parameter_to_query(
+        action_query,
+        action.parameters,
+        ( char * ) NULL
+    );
+
+    action_query = _add_json_parameter_to_query(
+        action_query,
+        action.static_parameters,
+        ( char * ) NULL
+    );
+
+    action_query = _add_json_parameter_to_query(
+        action_query,
+        action.session_values,
+        ( char * ) NULL
+    );
+
     action_query = _finalize_query( action_query );
 
     // Set UID
-    set_uid( uid, session_values );
+    set_uid( action.uid, action.session_values );
 
     if( action_query == NULL )
     {
@@ -1308,61 +1379,62 @@ bool execute_action_query( char * query, char * static_parameters, char * parame
     }
 
     PQclear( action_result );
-    clear_session_gucs( session_values );
+    clear_session_gucs( action.session_values );
     return true;
 }
 
 /*
  * bool execute_action( PGresult * result, int row )
- *     Wrapper for processing work_queue items and dispatching them to either the
- *     URI or query execution subroutines
+ *     Wrapper for processing work_queue items and dispatching them to either
+ *     the URI or query execution subroutines.
  *
  * Arguments:
- *     - PGresult * result: Dequeued work queue entry
- *     - int row: Row index of the work queue entry
+ *     - PGresult * result: Dequeued work queue entry.
+ *     - int row:           Row index of the work queue entry.
  * Return:
- *     bool is_success: true indicates successful completion of the action, false otherwise
+ *     bool is_success:     true indicates successful completion of the action,
+ *                          false otherwise.
  * Error Conditions
- *     - Emits error on inability to allocate string memory
- *     - Emits error from URI or query subroutines upon failure
+ *     - Emits error on inability to allocate string memory.
+ *     - Emits error from URI or query subroutines upon failure.
  */
 bool execute_action( PGresult * result, int row )
 {
     bool   execute_action_result = false;
+    struct action_result action  = {0};
+    char * use_ssl = NULL;
 
-    char * parameters        = NULL;
-    char * uid               = NULL;
-    char * recorded          = NULL;
-    char * transaction_label = NULL;
-    char * method            = NULL;
-    char * static_parameters = NULL;
-    char * uri               = NULL;
-    char * query             = NULL;
-    char * use_ssl           = NULL;
-    char * session_values    = NULL;
-    bool usessl              = false;
-
-    parameters        = get_column_value( row, result, "parameters" );
-    uid               = get_column_value( row, result, "uid" );
-    recorded          = get_column_value( row, result, "recorded" );
-    transaction_label = get_column_value( row, result, "transaction_label" );
-    session_values    = get_column_value( row, result, "session_values" );
-    uri               = get_column_value( row, result, "uri" );
+    action.parameters        = get_column_value( row, result, "parameters" );
+    action.uid               = get_column_value( row, result, "uid" );
+    action.recorded          = get_column_value( row, result, "recorded" );
+    action.session_values    = get_column_value( row, result, "session_values" );
+    action.uri               = get_column_value( row, result, "uri" );
 
     if( is_column_null( row, result, "static_parameters" ) == false )
     {
-        static_parameters = get_column_value( row, result, "static_parameters" );
+        action.static_parameters = get_column_value(
+            row,
+            result,
+            "static_parameters"
+        );
     }
 
-    method            = get_column_value( row, result, "method" );
-    query             = get_column_value( row, result, "query" );
-    use_ssl           = get_column_value( row, result, "use_ssl" );
+    action.transaction_label = get_column_value(
+        row,
+        result,
+        "transaction_label"
+    );
+
+    action.method = get_column_value( row, result, "method" );
+    action.query  = get_column_value( row, result, "query" );
+    use_ssl       = get_column_value( row, result, "use_ssl" );
 
     if( strcmp( use_ssl, "t" ) == 0 || strcmp( use_ssl, "T" ) == 0 )
     {
-        usessl = true;
+        action.use_ssl = true;
     }
 
+    // Determine if action is query or URI based, send to correct handler
     if( is_column_null( 0, result, "query" ) == false )
     {
         _log(
@@ -1370,19 +1442,11 @@ bool execute_action( PGresult * result, int row )
             "Executing action query"
         );
 
-        execute_action_result = execute_action_query(
-            query,
-            static_parameters,
-            parameters,
-            uid,
-            recorded,
-            transaction_label,
-            session_values
-        );
+        execute_action_result = execute_action_query( action );
 
         if( execute_action_result == true && cyanaudit_installed == true )
         {
-            _cyanaudit_integration( transaction_label );
+            _cyanaudit_integration( action.transaction_label );
         }
     }
     else if( is_column_null( 0, result, "uri" ) == false )
@@ -1392,21 +1456,14 @@ bool execute_action( PGresult * result, int row )
             "Executing API call"
         );
 
-        execute_action_result = execute_remote_uri_call(
-            uri,
-            static_parameters,
-            method,
-            parameters,
-            usessl,
-            session_values
-        );
+        execute_action_result = execute_remote_uri_call( action );
     }
     else
     {
         // Wat
         _log(
             LOG_LEVEL_WARNING,
-            "Dubious query / uri combination received as action"
+            "Conflicting query / uri combination received as action"
         );
         execute_action_result = false;
     }
@@ -1416,14 +1473,15 @@ bool execute_action( PGresult * result, int row )
 
 /*
  * void _cyanaudit_integration( char * transaction_label )
- *     Labels the completed transaction in CyanAudit, if present
+ *     Labels the completed transaction in CyanAudit, if present.
  *
  * Arguments:
- *     char * transaction_label: Label with which to identify transaction
+ *     char * transaction_label: Label with which to identify transaction.
  * Return:
  *     None
  * Error conditions:
- *     Emits error on failure to make a call to cyanaudit.fn_label_last_transaction()
+ *     Emits error on failure to make a call to
+ *     cyanaudit.fn_label_last_transaction().
  */
 void _cyanaudit_integration( char * transaction_label )
 {
@@ -1497,14 +1555,15 @@ bool _rollback_transaction( void )
 
 /*
  * bool _commit_transaction( void )
- *     Commits a SQL transaction
+ *     Commits a SQL transaction.
  *
  * Arguments:
  *    None
  * Return:
- *    bool is_success: true indicates that the transaction was successfully committed
+ *    bool is_success: true indicates that the transaction was successfully
+ *                     committed.
  * Error Conditions:
- *    Emits error on failure to commit transaction
+ *    Emits error on failure to commit transaction.
  */
 bool _commit_transaction( void )
 {
@@ -1541,14 +1600,14 @@ bool _commit_transaction( void )
 
 /*
  * bool _begin_transaction( void )
- *     Begins a SQL transaction, sets the global tx state flag in the process
+ *     Begins a SQL transaction, sets the global tx state flag in the process.
  *
  * Arguments:
  *     None
  * Return:
- *     bool is_success: Indicates that the transaction was successfully begun
+ *     bool is_success: Indicates that the transaction was successfully begun.
  * Error Conditions:
- *     Emits error on failure to start transaction (one is already in progress)
+ *     Emits error on failure to start transaction (one is already in progress.)
  */
 bool _begin_transaction( void )
 {
@@ -1586,17 +1645,19 @@ bool _begin_transaction( void )
 /*
  * bool set_uid( char * uid, char * session_values )
  *     Makes a call to the function specified in event_manager.set_uid_function,
- *     binding in the uid to ?uid? and the originating transaction GUC values specified
- *     in event_manager.session_gucs to their respective names.
+ *     binding in the uid to ?uid? and the originating transaction GUC values
+ *     specified in event_manager.session_gucs to their respective names.
  *
  * Arguments:
- *     - char * uid: String representation of the integer user ID
- *     - char * session_values: JSONB object containing the key-value pairs of GUCs and their values
+ *     - char * uid:            String representation of the integer user ID
+ *     - char * session_values: JSONB object containing the key-value pairs of
+ *                              GUCs and their values.
  * Return:
- *     bool is_success: Returns true on successful invokation of the set_uid_function, false otherwise
+ *     bool is_success:         Returns true on successful invokation of the
+ *                              set_uid_function, false otherwise.
  * Error Conditions:
- *     - Emits error on failure to allocate string memory
- *     - Emits error on failure to execute SQL function
+ *     - Emits error on failure to allocate string memory.
+ *     - Emits error on failure to execute SQL function.
  */
 bool set_uid( char * uid, char * session_values )
 {
@@ -1661,8 +1722,18 @@ bool set_uid( char * uid, char * session_values )
     set_uid_query_obj = _new_query( set_uid_query );
     free( set_uid_query );
 
-    set_uid_query_obj = _add_parameter_to_query( set_uid_query_obj, "uid", uid );
-    set_uid_query_obj = _add_json_parameter_to_query( set_uid_query_obj, session_values, ( char * ) NULL );
+    set_uid_query_obj = _add_parameter_to_query(
+        set_uid_query_obj,
+        "uid",
+        uid
+    );
+
+    set_uid_query_obj = _add_json_parameter_to_query(
+        set_uid_query_obj,
+        session_values,
+        ( char * ) NULL
+    );
+
     set_uid_query_obj = _finalize_query( set_uid_query_obj );
 
     if( set_uid_query_obj == NULL )
@@ -1677,6 +1748,7 @@ bool set_uid( char * uid, char * session_values )
     }
 
     PQclear( uid_function_result );
+    // Re-use handle
     uid_function_result = _execute_query(
         set_uid_query_obj->query_string,
         set_uid_query_obj->_bind_list,
@@ -1754,19 +1826,20 @@ void __sighup( int sig )
  *         starts the queue_loop function
  *
  * Arguments:
- *     - int argc: Count of arguments which this program was invoked with
- *     - char ** argv: Array of command-line parameters this program was invoked with
+ *     - int argc:     Count of arguments which this program was invoked with.
+ *     - char ** argv: Array of command-line parameters this program was
+ *                     invoked with.
  * Return:
- *     - int errcode: 0 on success, errno on failure
+ *     - int errcode:  0 on success, errno on failure.
  * Error Conditions:
  *     - Emits error on failure to initialize:
  *           - CuRL library
  *           - DB Connection
  *           - Extension installation checks
- *     - Emits error on failure to validate arguments
- *     - Emits error on failure to allocate string memory
- *     - May emit CuRL warnings or errors
- *     - May emit libpq-fe warnings or errors
+ *     - Emits error on failure to validate arguments.
+ *     - Emits error on failure to allocate string memory.
+ *     - May emit CuRL warnings or errors.
+ *     - May emit libpq-fe warnings or errors.
  */
 int main( int argc, char ** argv )
 {
@@ -1785,7 +1858,11 @@ int main( int argc, char ** argv )
     {
         enable_curl = true;
         curl_easy_setopt( curl_handle, CURLOPT_NOSIGNAL, 1  );
-        curl_easy_setopt( curl_handle, CURLOPT_USERAGENT, ( char * ) user_agent );
+        curl_easy_setopt(
+            curl_handle,
+            CURLOPT_USERAGENT,
+            ( char * ) user_agent
+        );
     }
     else
     {
@@ -1886,13 +1963,20 @@ int main( int argc, char ** argv )
 }
 
 /*
+ * void set_session_gucs( char * session_gucs )
+ *     Set the current session's GUCs based on stored values in the
+ *     session_gucs JSON
  *
- *
- *
- *
- *
- *
- *
+ * Arguments:
+ *     char * session_gucs: JSON structure of key (GUC name) and value
+ *                          (GUC value) pairs used to set the GUC in a
+ *                          new session.
+ * Return:
+ *     None
+ * Error Conditions:
+ *     - Emits error on failure to parse JSON
+ *     - Emits error on invalid input JSON (ARRAY, SCALAR)
+ *     - Emits error on failure to set GUC via SQL commands.
  *
  */
 void set_session_gucs( char * session_gucs )
@@ -1952,7 +2036,8 @@ void set_session_gucs( char * session_gucs )
         {
             _log(
                 LOG_LEVEL_ERROR,
-                "Expected string key in JSON structure for session_gucs (got %d at index %d)",
+                "Expected string key in JSON structure for session_gucs "
+                "(got %d at index %d)",
                 json_key_token.type,
                 i
             );
@@ -2068,6 +2153,22 @@ void set_session_gucs( char * session_gucs )
     return;
 }
 
+/*
+ * void clear_session_gucs( char * session_gucs )
+ *     Clears the GUC names present in the session_guc JSON, returning the
+ *     session to a base state.
+ *
+ * Arguments:
+ *     char * session_gucs: JSON object containing key (GUC names) and value
+ *                          (GUC value) pairs used to clear the GUCs.
+ * Return:
+ *     None
+ * Error Conditions:
+ *     - Emits error on failure to parse JSON.
+ *     - Emits error on receipt of invalid JSON structure (ARRAY,SCALAR).
+ *     - Emits error on failure to clear GUC via SQL commands.
+ */
+
 void clear_session_gucs( char * session_gucs )
 {
     PGresult *  result           = NULL;
@@ -2123,7 +2224,8 @@ void clear_session_gucs( char * session_gucs )
         {
             _log(
                 LOG_LEVEL_ERROR,
-                "Expected string key in JSON structure for session_gucs (got %d at index %d)",
+                "Expected string key in JSON structure for session_gucs"
+                " (got %d at index %d)",
                 json_key_token.type,
                 i
             );
