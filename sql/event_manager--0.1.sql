@@ -913,4 +913,5 @@ GRANT SELECT ON @extschema@.tb_action TO public;
 GRANT SELECT ON @extschema@.tb_setting TO public;
 GRANT SELECT ON @extschema@.tb_event_table TO public;
 GRANT ALL ON @extschema@.tb_event_table_work_item_instance TO public;
+GRANT USAGE, SELECT ON SEQUENCE @extschema@.sq_pk_event_table_work_item_intsance TO public;
 GRANT USAGE ON SCHEMA @extschema@ TO public;

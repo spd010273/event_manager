@@ -2272,6 +2272,12 @@ void clear_session_gucs( char * session_gucs )
         i = i + 2;
 
         params[0] = key;
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Clearing GUC %s",
+            key
+        );
+
         result = _execute_query(
             ( char * ) clear_guc,
             params,
