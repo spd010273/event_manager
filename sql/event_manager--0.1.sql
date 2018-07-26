@@ -682,7 +682,8 @@ BEGIN
                         recorded,
                         transaction_label,
                         action,
-                        execute_asynchronously
+                        execute_asynchronously,
+                        session_values
                     )
              VALUES
                     (
@@ -691,11 +692,19 @@ BEGIN
                         NEW.recorded,
                         my_transaction_label,
                         my_action,
-                        my_is_async
+                        my_is_async,
+                        NEW.session_values
                     );
 
         IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
-            RAISE DEBUG '@extschema@: Created work queue row';
+            RAISE DEBUG '@extschema@: Created work queue row (%,%,%,%,%,%,%)',
+                        my_parameters,
+                        my_uid,
+                        NEW.recorded,
+                        my_transaction_label,
+                        my_action,
+                        my_is_async,
+                        NEW.session_values;
         END IF;
     END LOOP;
 
@@ -730,6 +739,7 @@ DECLARE
     my_static_parameters JSONB;
     my_key               TEXT;
     my_value             TEXT;
+    my_set_uid_query     TEXT;
 BEGIN
     my_is_async := TRUE;
 
@@ -766,15 +776,16 @@ BEGIN
         RETURN NULL;
     END IF;
 
-    EXECUTE 'SELECT ' || COALESCE(
-                regexp_replace(
-                    COALESCE( current_setting( '@extschema@.set_uid_function', TRUE ), 'NULL' ),
-                    '\?uid\?',
-                    quote_nullable( NEW.uid ),
-                    'g'
-                ),
-                'NULL'
-            );
+    SELECT 'SELECT ' || COALESCE(
+                    regexp_replace(
+                        COALESCE( current_setting( '@extschema@.set_uid_function', TRUE ), 'NULL' ),
+                        '\?uid\?',
+                        quote_nullable( NEW.uid ),
+                        'g'
+                    ),
+                    'NULL'
+           )
+      INTO my_set_uid_query;
 
     my_query := regexp_replace( my_query, '\?recorded\?', quote_nullable( NEW.recorded::VARCHAR ), 'g' );
     my_query := regexp_replace( my_query, '\?uid\?', quote_nullable( NEW.uid::VARCHAR ), 'g' );
@@ -802,6 +813,7 @@ BEGIN
                               FROM jsonb_each_text( NEW.session_values )
                            ) LOOP
         my_query := regexp_replace( my_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
+        my_set_uid_query := regexp_replace( my_set_uid_query, '\?' || my_key || '\?', quote_nullable( my_value ), 'g' );
     END LOOP;
 
     my_query := regexp_replace( my_query, '\?(((OLD)|(NEW))\.)?\w+\?', 'NULL', 'g' );
@@ -810,6 +822,7 @@ BEGIN
         RAISE DEBUG '@extschema@: work processing - final query is %', my_query;
     END IF;
 
+    EXECUTE my_set_uid_function;
     EXECUTE my_query;
 
     PERFORM p.proname
