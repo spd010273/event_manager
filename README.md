@@ -7,7 +7,7 @@ Event Manager (event_manager) is a PostgreSQL extension that implements a loosly
 
 Event Manager consists of two processing loops handing events and work, respectively.
 
-Events can be processed either synchronously or asynchronously in both stages of processing, independently.
+Events can be processed either synchronously or asynchronously.
 
 ![Concept](images/event_manager_concept.png)
 
@@ -38,6 +38,7 @@ Actions are either local database modification or remote API calls that happen a
 ![Schema](images/event_manager_schema.png)
 
 ## Requirements:
+( See docs/setup.md and docs/test.md for detailed requuirements )
 * PostgreSQL 9.6+
 * gcc
 * libcurl
@@ -47,6 +48,8 @@ Actions are either local database modification or remote API calls that happen a
 * Valgrind (optional)
 
 ## Installation
+( See docs/setup.md for detailed instructions )
+
 1. Checkout the event_manager source from github
 2. Ensure that pg_config is in the user's path
 3. Follow installation guide in docs/setup.md for setting up and checking prerequisites

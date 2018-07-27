@@ -22,6 +22,8 @@ ldconfig -p | grep libpq
 
 git clone https://spd010273@bitbucket.org/neadwerx/event_manager.git
 cd event_manager
+git submodule init
+git submodule update
 make
 sudo make install
 ```

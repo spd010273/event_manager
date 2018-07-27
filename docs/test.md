@@ -45,3 +45,5 @@ It will return an itemized list of passed tests, stopping on the first failure
 Regression tests can be performed by using run_tests.pl, and debugging can be done using Valgrind.
 
 To perform testing using Valgrind, pass the -V flag to run_tests.pl - It will start the queue processors under valgrind
+
+Logs from each process are dumped to /tmp/event_manager_<type>.log Where <type> is E for the event queue processor and W for work queue processor.
