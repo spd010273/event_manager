@@ -37,6 +37,20 @@ Usage: event_manager\n \
     -v VERSION\n \
     -? HELP ]\n";
 
+/*
+ * void _parse_args( int argc, char ** argv )
+ *     Argument parser for main()
+ *
+ * Arguments:
+ *     - int argc:     Count of arguments.
+ *     - char ** argv: String array of CLI arguments.
+ * Return:
+ *     None
+ * Error Conditions:
+ *     - Emits error on failure to allocate string memory.
+ *     - Emits error on receipt of invalid arguments.
+ *     - Emits error on receipt of conflicting arguments.
+ */
 void _parse_args( int argc, char ** argv )
 {
     int    c        = 0;
@@ -81,12 +95,18 @@ void _parse_args( int argc, char ** argv )
 
     if( event_listener == true && work_listener == true )
     {
-        _usage( "Event and Work queue processing modes are mutually exclusive" );
+        _usage(
+            "Event and Work queue processing modes "
+            "are mutually exclusive"
+        );
     }
 
     if( event_listener == false && work_listener == false )
     {
-        _usage( "Need to instruct program to listen to events (-E) or work (-W)" );
+        _usage(
+            "Need to instruct program to listen to "
+            "events (-E) or work (-W)"
+        );
     }
 
     if( port == NULL )
@@ -112,6 +132,14 @@ void _parse_args( int argc, char ** argv )
         sizeof( char )
     );
 
+    if( conninfo == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Failed to allocate memory for connection string :("
+        );
+    }
+
     strcpy( conninfo, "user=" );
     strcat( conninfo, username );
     strcat( conninfo, " host=" );
@@ -130,6 +158,18 @@ void _parse_args( int argc, char ** argv )
     return;
 }
 
+/*
+ * void _usage( char * message )
+ *     Emits basic usage and argument tips
+ *
+ * Arguments:
+ *     char * message: Message containing tips
+ *                     (directing user to fix arguments.)
+ * Return:
+ *     None
+ * Error Conditions:
+ *     None
+ */
 void _usage( char * message )
 {
     if( message != NULL )
@@ -142,6 +182,25 @@ void _usage( char * message )
     exit( 1 );
 }
 
+/*
+ * void _log( char * log_level, char * message, va_list )
+ *     Custom logger implementing log levels:
+ *        LOG_LEVEL_WARNING: Emitted on STDERR (non fatal)
+ *        LOG_LEVEL_ERROR: Emitted on STDERR (non fatal)
+ *        LOG_LEVEL_FATAL: Emitted on STDERR (fatal)
+ *        LOG_LEVEL_DEBUG: Emitted on STDOUT (non fatal)
+ *        LOG_LEVEL_INFO: Emitted on STDOUT (non fatal)
+ *
+ * Arguments:
+ *     - char * log_level: Level at which to emit the log message.
+ *     - char * message:   Message to emit.
+ *     - va_list:          List of variable arguments which are to be
+ *                         substituted into the message string
+ * Return:
+ *     None
+ * Error Conditions:
+ *     None
+ */
 void _log( char * log_level, char * message, ... )
 {
     va_list args = {{0}};

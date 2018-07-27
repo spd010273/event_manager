@@ -1,5 +1,20 @@
 #!/usr/bin/perl
 
+=pod
+/*------------------------------------------------------------------------
+ *
+ * install.pl
+ *     Basic systemctl installer for Event Manager
+ *
+ * Copyright (c) 2018, Nead Werx, Inc.
+ *
+ * IDENTIFICATION
+ *        install.pl
+ *
+ *------------------------------------------------------------------------
+ */
+=cut
+
 use strict;
 use warnings;
 

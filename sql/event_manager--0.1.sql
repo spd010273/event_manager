@@ -20,7 +20,7 @@
  *     @extschema@.unlogged_queue: TRUE/FALSE - when true, creates queue tables as UNLOGGED, speeding up DML to these tables.
  *                                 The queues lose crash safety when this is TRUE, and will be truncated on crash recovery.
  *                                 Additionally, the queues will NOT be replicated when set to TRUE
- *     @extschema@.
+ *     @extschema@. #TODO
  *
  *
  *  Note:
