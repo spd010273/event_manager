@@ -40,7 +40,9 @@ Actions are either local database modification or remote API calls that happen a
 ![Schema](images/event_manager_schema.png)
 
 ## Requirements:
+
 ( See docs/setup.md and docs/test.md for detailed requuirements )
+
 * PostgreSQL 9.6+
 * gcc
 * libcurl
@@ -50,6 +52,7 @@ Actions are either local database modification or remote API calls that happen a
 * Valgrind (optional)
 
 ## Installation
+
 ( See docs/setup.md for detailed instructions )
 
 1. Checkout the event_manager source from github
