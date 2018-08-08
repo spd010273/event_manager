@@ -851,7 +851,7 @@ void _free_query( struct query * query_object )
 }
 
 /*
- * void _add_json_parameters_to_param_list(
+ * char * _add_json_parameters_to_param_list(
  *     CURL * curl_handle,
  *     char * param_list,
  *     char * json_string,
@@ -871,13 +871,13 @@ void _free_query( struct query * query_object )
  *                         may be adjusted as parameters are added
  *                         (pass by reference).
  * Return:
- *     None
+ *     char * param_list:  Modified parameter list
  * Error Conditions:
  *     - Emits error on failure to allocate string memory.
  *     - Emits error on failure to parse JSON object.
  *     - Emits error on receipt of invalid JSON structure (ARRAY / SCALAR ).
  */
-void _add_json_parameters_to_param_list(
+char * _add_json_parameters_to_param_list(
     CURL * curl_handle,
     char * param_list,
     char * json_string,
@@ -903,14 +903,13 @@ void _add_json_parameters_to_param_list(
             "Received NULL URI parameter list"
         );
 
-        return;
+        return NULL;
     }
 
     if( json_string == NULL )
     {
         _log( LOG_LEVEL_DEBUG, "Nothing to bind" );
-
-        return;
+        return param_list;
     }
 
     json_tokens = json_tokenise( json_string, &max_tokens );
@@ -921,8 +920,8 @@ void _add_json_parameters_to_param_list(
             LOG_LEVEL_ERROR,
             "Failed to tokenise JSON string for binding to parameter_list"
         );
-
-        return;
+        free( param_list );
+        return NULL;
     }
 
     // JSMN returns OBJECT, KEY, VALUE, ...
@@ -933,8 +932,9 @@ void _add_json_parameters_to_param_list(
             LOG_LEVEL_ERROR,
             "Root element of JSON response is not an object"
         );
-
-        return;
+        free( param_list );
+        free( json_tokens );
+        return NULL;
     }
 
     if( max_tokens < 3 )
@@ -952,8 +952,8 @@ void _add_json_parameters_to_param_list(
         );
 
         free( json_tokens );
-
-        return;
+        free( param_list );
+        return NULL;
     }
 
     i = 1;
@@ -976,7 +976,7 @@ void _add_json_parameters_to_param_list(
             free( json_tokens );
             free( param_list );
 
-            return;
+            return NULL;
         }
 
         *malloc_size = *malloc_size
@@ -1003,7 +1003,7 @@ void _add_json_parameters_to_param_list(
 
             free( json_tokens );
 
-            return;
+            return NULL;
         }
 
         if( first_param_pass == false )
@@ -1040,7 +1040,7 @@ void _add_json_parameters_to_param_list(
             free( param_list );
             free( json_tokens );
 
-            return;
+            return NULL;
         }
 
         json_value_token = json_tokens[i];
@@ -1060,7 +1060,7 @@ void _add_json_parameters_to_param_list(
             free( json_tokens );
             free( param_list );
 
-            return;
+            return NULL;
         }
 
         strncpy(
@@ -1088,7 +1088,7 @@ void _add_json_parameters_to_param_list(
             free( json_tokens );
             free( param_list );
 
-            return;
+            return NULL;
         }
 
         *malloc_size = *malloc_size + strlen( encoded_value ) + 2;
@@ -1108,7 +1108,7 @@ void _add_json_parameters_to_param_list(
             free( param_list );
             curl_free( encoded_value );
 
-            return;
+            return NULL;
         }
 
         strcat( param_list, "=" );
@@ -1154,7 +1154,7 @@ void _add_json_parameters_to_param_list(
     }
 
     free( json_tokens );
-    return;
+    return param_list;
 }
 
 /*

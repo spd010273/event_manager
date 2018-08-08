@@ -1005,12 +1005,21 @@ bool execute_remote_uri_call( struct action_result * action )
         strcpy( param_list, "?" );
     }
 
-    _add_json_parameters_to_param_list(
+    param_list = _add_json_parameters_to_param_list(
         curl_handle,
         param_list,
         action->parameters,
         &malloc_size
     );
+
+    if( param_list == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to add JSON parameters to param list"
+        );
+        return false;
+    }
 
     if( action->static_parameters != NULL )
     {
@@ -1022,14 +1031,14 @@ bool execute_remote_uri_call( struct action_result * action )
             _log(
                 LOG_LEVEL_ERROR,
                 "Unable to allocate memory for simple string "
-                "concatenation operation :("
+                " concatenation operation :("
             );
             return false;
         }
 
         strcat( param_list, "&" );
 
-        _add_json_parameters_to_param_list(
+        param_list = _add_json_parameters_to_param_list(
             curl_handle,
             param_list,
             action->static_parameters,
@@ -1063,7 +1072,7 @@ bool execute_remote_uri_call( struct action_result * action )
 
         strcat( param_list, "&" );
 
-        _add_json_parameters_to_param_list(
+        param_list = _add_json_parameters_to_param_list(
             curl_handle,
             param_list,
             action->session_values,
