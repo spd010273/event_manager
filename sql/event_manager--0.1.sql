@@ -83,6 +83,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     when_function           VARCHAR DEFAULT current_setting( '@extschema@.default_when_function', TRUE )::VARCHAR,
     op                      CHAR(1)[],
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
+    inverse_event           INTEGER REFERENCES @extschema@.tb_event_table_work_item,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 
