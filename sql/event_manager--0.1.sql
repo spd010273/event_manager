@@ -77,6 +77,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     source_column_name      VARCHAR(63),
     target_event_table      INTEGER REFERENCES @extschema@.tb_event_table,
     action                  INTEGER NOT NULL REFERENCES @extschema@.tb_action,
+    label                   JSONB,
     description             JSONB,
     transaction_label       VARCHAR,
     work_item_query         TEXT NOT NULL,
@@ -99,12 +100,14 @@ COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'In
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.target_event_table IS 'Indicates the target of this work items action. Not necessary but useful for any user interface built around this';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_column_name IS 'Indicated the column of the source table this event if firing on. This is not used for selectively firing update triggers but to help prevent the user from implementing identical/similar events';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.action IS 'Foreign key to tb_action - indicates what this work item generates parameters for';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.label IS 'User-facing label for this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.description IS 'User-facing description for that this work item is / does';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.transaction_label IS 'Label for what the action is performing. Used in Cyanaudit integration';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.work_item_query IS 'Generates a list of parameters for the action. This query has named bind point for the columns in this table. Query should generate JSONB aliased as parameters';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.when_function IS 'Filters events entering tb_event_queue. Example prototype is fn_dummy_when_function. Function should return BOOLEAN';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.op IS 'Indicates what DML operation this work item applies: U - Update, I - Insert, D - Delete.';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.execute_asynchronously IS 'Determines what mode of execution this work item will be ran under.';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.inverse_event IS 'Indicates that this event has an inverse event buy linking to it'; 
 
 DO
  $_$
