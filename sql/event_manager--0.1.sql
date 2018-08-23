@@ -248,8 +248,9 @@ CREATE TABLE @extschema@.tb_event_table_work_item_instance
     event_table_work_item_instance INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item_instance'),
     event_table_work_item   INTEGER NOT NULL REFERENCES @extschema@.tb_event_table_work_item,
     source_pk               INTEGER,
-    target_pk               INTEGER NOT NULL,
-    metadata                JSONB
+    target_pk               INTEGER,
+    metadata                JSONB,
+    CHECK( source_pk IS NOT NULL OR target_pk IS NOT NULL )
 );
 
 COMMENT ON TABLE @extschema@.tb_event_table_work_item_instance IS 'Can be used to aid work item queries or action queries when the scope of an action query is non-deterministic or too broad. This table is intended for use by any integrating application, but is not required';
