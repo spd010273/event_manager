@@ -88,12 +88,14 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 
+/*
 CREATE UNIQUE INDEX ix_source_action_target_unique ON @extschema@.tb_event_table_work_item(
     COALESCE( target_event_table, -1 ),
     source_event_table,
     COALESCE( source_column_name, '' ),
     action
 );
+*/
 
 COMMENT ON TABLE @extschema@.tb_event_table_work_item IS 'A list of actions that should occur for any given event table';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'Indicates the table that can trigger this work item';
