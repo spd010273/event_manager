@@ -41,6 +41,79 @@ END
 
 SET @extschema@.unlogged_queue = 'FALSE';
 
+CREATE TABLE @extschema@.tb_setting
+(
+    key     VARCHAR,
+    value   VARCHAR,
+    CHECK( key ~ '^@extschema@\.' )
+);
+CREATE UNIQUE INDEX ix_unique_setting_key ON @extschema@.tb_setting( lower( key ) );
+
+CREATE FUNCTION event_manager.fn_get_config
+(
+    in_name VARCHAR
+)
+RETURNS VARCHAR AS
+ $_$
+    SELECT COALESCE(
+               NULLIF( current_setting( in_name, TRUE ), '' ),
+               (
+                   SELECT set_config( key, value, TRUE )
+                     FROM event_manager.tb_setting
+                    WHERE key = in_name
+               )
+           );
+ $_$
+LANGUAGE SQL STABLE PARALLEL SAFE;
+
+CREATE FUNCTION @extschema@.fn_set_configuration()
+RETURNS TRIGGER AS
+ $_$
+BEGIN
+    IF( NEW.key NOT LIKE '@extschema@.%' ) THEN
+        RAISE EXCEPTION '% is not an extension GUC and cannot be modified using this table', NEW.key;
+    END IF;
+
+    -- GUC takes effect for new sessions
+    EXECUTE format(
+        'ALTER DATABASE %I SET %s = %L',
+        current_database(),
+        NEW.key,
+        NEW.value
+    );
+
+    -- GUC takes effect for current session
+    EXECUTE format(
+        'SET %s = %L',
+        NEW.key,
+        NEW.value
+    );
+
+    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        RAISE DEBUG '@extschema@: set configuration parameter % to %', NEW.key, NEW.value;
+    END IF;
+
+    RETURN NEW;
+END
+ $_$
+    LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE SECURITY DEFINER;
+
+CREATE TRIGGER tr_set_configuration
+    AFTER INSERT OR UPDATE ON @extschema@.tb_setting
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_set_configuration();
+
+INSERT INTO @extschema@.tb_setting
+            (
+                key,
+                value
+            )
+     VALUES ( '@extschema@.execute_asynchronously', 't' ),
+            ( '@extschema@.set_uid_function', 'NULL' ),
+            ( '@extschema@.get_uid_function', 'NULL' ),
+            ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' ),
+            ( '@extschema@.session_gucs', '' ),
+            ( '@extschema@.base_url', 'localhost' );
+
 CREATE SEQUENCE @extschema@.sq_pk_event_table;
 CREATE TABLE @extschema@.tb_event_table
 (
@@ -81,9 +154,9 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     description             JSONB,
     transaction_label       VARCHAR,
     work_item_query         TEXT NOT NULL,
-    when_function           VARCHAR DEFAULT current_setting( '@extschema@.default_when_function', TRUE )::VARCHAR,
+    when_function           VARCHAR DEFAULT @extschema@.fn_get_config( '@extschema@.default_when_function' ),
     op                      CHAR(1)[],
-    execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
+    execute_asynchronously  BOOLEAN DEFAULT @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN,
     inverse_event           INTEGER REFERENCES @extschema@.tb_event_table_work_item,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
@@ -176,7 +249,7 @@ ALTER TABLE @extschema@.tb_work_queue
     ADD COLUMN uid INTEGER,
     ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     ADD COLUMN transaction_label VARCHAR,
-    ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT COALESCE( current_setting( '@extschema@.execute_asynchronously', TRUE )::BOOLEAN, TRUE ),
+    ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN,
     ADD COLUMN session_values JSONB;
 
 COMMENT ON TABLE @extschema@.tb_work_queue IS 'Queue for work_item_query results. Remaining contents copied from the corresponding event_queue entry';
@@ -188,61 +261,6 @@ COMMENT ON COLUMN @extschema@.tb_work_queue.transaction_label IS 'Label for tran
 COMMENT ON COLUMN @extschema@.tb_work_queue.execute_asynchronously IS 'Indicates how this action should be executed';
 COMMENT ON COLUMN @extschema@.tb_work_queue.session_values IS 'Copy of the session values from the event queue';
 
-CREATE TABLE @extschema@.tb_setting
-(
-    key     VARCHAR,
-    value   VARCHAR,
-    CHECK( key ~ '^@extschema@\.' )
-);
-CREATE UNIQUE INDEX ix_unique_setting_key ON @extschema@.tb_setting( lower( key ) );
-
-CREATE FUNCTION @extschema@.fn_set_configuration()
-RETURNS TRIGGER AS
- $_$
-BEGIN
-    IF( NEW.key NOT LIKE '@extschema@.%' ) THEN
-        RAISE EXCEPTION '% is not an extension GUC and cannot be modified using this table', NEW.key;
-    END IF;
-
-    -- GUC takes effect for new sessions
-    EXECUTE format(
-        'ALTER DATABASE %I SET %s = %L',
-        current_database(),
-        NEW.key,
-        NEW.value
-    );
-
-    -- GUC takes effect for current session
-    EXECUTE format(
-        'SET %s = %L',
-        NEW.key,
-        NEW.value
-    );
-
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
-        RAISE DEBUG '@extschema@: set configuration parameter % to %', NEW.key, NEW.value;
-    END IF;
-
-    RETURN NEW;
-END
- $_$
-    LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE SECURITY DEFINER;
-
-CREATE TRIGGER tr_set_configuration
-    AFTER INSERT OR UPDATE ON @extschema@.tb_setting
-    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_set_configuration();
-
-INSERT INTO @extschema@.tb_setting
-            (
-                key,
-                value
-            )
-     VALUES ( '@extschema@.execute_asynchronously', 't' ),
-            ( '@extschema@.set_uid_function', 'NULL' ),
-            ( '@extschema@.get_uid_function', 'NULL' ),
-            ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' ),
-            ( '@extschema@.session_gucs', '' ),
-            ( '@extschema@.base_url', 'localhost' );
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance
