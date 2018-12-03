@@ -983,11 +983,25 @@ static size_t _curl_write_callback(
 bool execute_remote_uri_call( struct action_result * action )
 {
     struct curl_response write_buffer = {0};
-    CURLcode response                 = {0};
-    char * remote_call                = NULL;
-    char * param_list                 = NULL;
-    int malloc_size                   = 2;
+    CURLcode             response     = {0};
+    char *               remote_call  = NULL;
+    char *               param_list   = NULL;
+    unsigned int         malloc_size  = 2;
 
+    if( action == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "cannot execute remote API call on NULL action_result handle"
+        );
+
+        return false;
+    }
+
+    // Replace any bindpoints that may exist in the uri prior to appending a parameter list
+    _bind_uri_arguments( &(action->uri), action->parameters, NULL );
+
+    // Append parameter list
     param_list = ( char * ) calloc( malloc_size, sizeof( char ) );
 
     if( param_list == NULL )
@@ -1993,15 +2007,15 @@ int main( int argc, char ** argv )
  */
 void set_session_gucs( char * session_gucs )
 {
-    PGresult *  result           = NULL;
-    jsmntok_t * json_tokens      = NULL;
-    jsmntok_t   json_key_token   = {0};
-    jsmntok_t   json_value_token = {0};
-    char *      key              = NULL;
-    char *      value            = NULL;
-    char *      params[2]        = {NULL};
-    int         i                = 0;
-    int         max_tokens       = 0;
+    PGresult *   result           = NULL;
+    jsmntok_t *  json_tokens      = NULL;
+    jsmntok_t    json_key_token   = {0};
+    jsmntok_t    json_value_token = {0};
+    char *       key              = NULL;
+    char *       value            = NULL;
+    char *       params[2]        = {NULL};
+    unsigned int i                = 0;
+    unsigned int max_tokens       = 0;
 
     if( session_gucs == NULL || strlen( session_gucs ) == 0 )
     {
@@ -2191,13 +2205,13 @@ void set_session_gucs( char * session_gucs )
 
 void clear_session_gucs( char * session_gucs )
 {
-    PGresult *  result           = NULL;
-    jsmntok_t * json_tokens      = NULL;
-    jsmntok_t   json_key_token   = {0};
-    char *      key              = NULL;
-    char *      params[1]        = {NULL};
-    int         i                = 0;
-    int         max_tokens       = 0;
+    PGresult *   result           = NULL;
+    jsmntok_t *  json_tokens      = NULL;
+    jsmntok_t    json_key_token   = {0};
+    char *       key              = NULL;
+    char *       params[1]        = {NULL};
+    unsigned int i                = 0;
+    unsigned int max_tokens       = 0;
 
     if( session_gucs == NULL || strlen( session_gucs ) == 0 )
     {

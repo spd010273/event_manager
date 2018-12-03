@@ -28,6 +28,19 @@
 
 #define JSON_TOKENS 16
 
+static struct json_kv * get_next_json_kv_pair( char *, char *, bool * );
+static struct json_kv * new_kv_pair(
+    char *,         // JSON string
+    jsmntok_t *,    // Key token
+    jsmntok_t *,    // Value token
+    jsmntok_t *,    // Token array
+    char *,         // Key prefix
+    bool *,         // Error flag
+    unsigned int *, // State variable
+    unsigned int *  // State variable
+);
+static void _free_json_kv( struct json_kv * );
+
 /*
  * struct query * _new_query( char * query_string )
  *     Generates a query struct from a query string, allowing
@@ -536,21 +549,12 @@ void _add_parameter_to_query(
  */
 void _add_json_parameter_to_query(
     struct query * query_obj,
-    char * json_string,
-    char * key_prefix
+    char *         json_string,
+    char *         key_prefix
 )
 {
-    jsmntok_t * json_tokens      = NULL;
-    jsmntok_t   json_key_token   = {0};
-    jsmntok_t   json_value_token = {0};
-    jsmntok_t   temp_token       = {0};
-    char *      key              = NULL;
-    char *      value            = NULL;
-    int         i                = 0;
-    int         j                = 0;
-    int         end_index        = 0;
-    int         max_tokens       = 0;
-    int         key_size_offset  = 0;
+    bool             json_error     = false;
+    struct json_kv * key_value_pair = NULL;
 
     if( json_string == NULL )
     {
@@ -580,197 +584,49 @@ void _add_json_parameter_to_query(
         return;
     }
 
-    json_tokens = json_tokenise( json_string, &max_tokens );
-
-    if( json_tokens == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to tokenise JSON string for binding to query"
-        );
-        _free_query( query_obj );
-        return;
-    }
-
-    // JSMN returns OBJECT, KEY, VALUE, ...
-    //  We're expecting at least an object with one key and one value
-    if( json_tokens[0].type != JSMN_OBJECT )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Root element of JSON response is not an object"
-        );
-        _free_query( query_obj );
-        free( json_tokens );
-        return;
-    }
-
-    if( max_tokens < 3 )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "JSON response is empty"
-        );
-
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Got '%s', (%d tokens )",
-            json_string,
-            max_tokens
-        );
-        _free_query( query_obj );
-        free( json_tokens );
-        return;
-    }
-
-    i = 1;
-    _log( LOG_LEVEL_DEBUG, "Parsing JSON '%s'", json_string );
-
-    if( key_prefix != NULL )
-    {
-        key_size_offset = strlen( key_prefix );
-    }
-
-    for(;;)
-    {
-        json_key_token = json_tokens[i];
-
-        if( json_key_token.type != JSMN_STRING )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Expected string key in JSON structure (got %d at index %d)",
-                json_key_token.type,
-                i
+    for(
+            key_value_pair = get_next_json_kv_pair(
+                json_string, // Initialize JSON tokenization and setup state
+                key_prefix,
+                &json_error
             );
-            free( json_tokens );
+            json_error == false && key_value_pair != NULL;
+            key_value_pair = get_next_json_kv_pair(
+                json_string, // Continue parsing KV errors
+                key_prefix,  // Until we get and error or hit the
+                &json_error  // end of the string
+            )
+       )
+    {
+        if( key_value_pair == NULL || json_error == true )
+        {
             _free_query( query_obj );
-            return;
-        }
 
-        key = ( char * ) calloc(
-            ( json_key_token.end - json_key_token.start + 1 + key_size_offset ),
-            sizeof( char )
-        );
-
-        if( key == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for JSON key string"
-            );
-            _free_query( query_obj );
-            free( json_tokens );
-            return;
-        }
-
-        if( key_prefix != NULL )
-        {
-            strcpy( key, key_prefix );
-        }
-
-        strncat(
-            key,
-            ( char * ) ( json_string + json_key_token.start ),
-            json_key_token.end - json_key_token.start
-        );
-
-        key[key_size_offset + json_key_token.end - json_key_token.start] = '\0';
-
-        i++;
-
-        if( i >= ( max_tokens ) )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Reached unexpected end of JSON object"
-            );
-            free( key );
-            free( json_tokens );
-            _free_query( query_obj );
-            return;
-        }
-
-        json_value_token = json_tokens[i];
-
-        value = ( char * ) calloc(
-            ( json_value_token.end - json_value_token.start + 1 ),
-            sizeof( char )
-        );
-
-        if( value == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for JSON value string"
-            );
-            _free_query( query_obj );
-            free( json_tokens );
-            free( key );
-            return;
-        }
-
-        strncpy(
-            value,
-            ( char * ) ( json_string + json_value_token.start ),
-            json_value_token.end - json_value_token.start
-        );
-
-        value[json_value_token.end - json_value_token.start] = '\0';
-
-        if(
-             json_value_token.type == JSMN_OBJECT ||
-             json_value_token.type == JSMN_ARRAY
-          )
-        {
-            // index i to point to the next key by finding the index of the
-            //  first token that is >= our value's end index
-            end_index = json_value_token.end;
-
-            for( j = i; j < max_tokens; j++ )
+            if( key_value_pair != NULL )
             {
-                temp_token = json_tokens[j];
-                if( temp_token.start >= end_index )
-                {
-                    i = j;
-                    break;
-                }
+                _free_json_kv( key_value_pair );
             }
 
-            // The value which is an object or key somehow was last thing in
-            // our json object
-            i = max_tokens;
-        }
-
-        if( strcmp( value, "null" ) == 0 || strcmp( value, "NULL" ) == 0 )
-        {
-            free( value );
-            value = NULL;
+            return;
         }
 
         _add_parameter_to_query(
             query_obj,
-            key,
-            value
+            key_value_pair->key,
+            key_value_pair->value
         );
 
-        _log( LOG_LEVEL_DEBUG, "Potentially bound KV: %s,%s", key, value );
-        free( key );
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Potentially bound KV: %s,%s",
+            key_value_pair->key,
+            key_value_pair->value
+        );
 
-        if( value != NULL )
-        {
-            free( value );
-        }
-
-        if( i >=  ( max_tokens - 1 ) )
-        {
-            break;
-        }
-
-        i++;
+        _free_json_kv( key_value_pair );
+        key_value_pair = NULL;
     }
 
-    free( json_tokens );
     return;
 }
 
@@ -855,7 +711,7 @@ void _free_query( struct query * query_object )
  *     CURL * curl_handle,
  *     char * param_list,
  *     char * json_string,
- *     int * malloc_size
+ *     unsigned int * malloc_size
  * )
  *    Adds the parameters from the json_string to a URI's parameter list.
  *    Example:
@@ -878,23 +734,16 @@ void _free_query( struct query * query_object )
  *     - Emits error on receipt of invalid JSON structure (ARRAY / SCALAR ).
  */
 char * _add_json_parameters_to_param_list(
-    CURL * curl_handle,
-    char * param_list,
-    char * json_string,
-    int * malloc_size
+    CURL *         curl_handle,
+    char *         param_list,
+    char *         json_string,
+    unsigned int * malloc_size
 )
 {
-    jsmntok_t * json_tokens      = NULL;
-    jsmntok_t   json_key_token   = {0};
-    jsmntok_t   json_value_token = {0};
-    jsmntok_t   temp_token       = {0};
-    int         end_index        = 0;
-    int         j                = 0;
-    int         i                = 0;
-    int         max_tokens       = 0;
-    bool        first_param_pass = true;
-    char      * encoded_value    = NULL;
-    char      * value            = NULL;
+    bool             first_param_pass = true;
+    bool             json_error       = false;
+    char *           encoded_value    = NULL;
+    struct json_kv * key_value_pair   = NULL;
 
     if( param_list == NULL )
     {
@@ -912,76 +761,37 @@ char * _add_json_parameters_to_param_list(
         return param_list;
     }
 
-    json_tokens = json_tokenise( json_string, &max_tokens );
-
-    if( json_tokens == NULL )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to tokenise JSON string for binding to parameter_list"
-        );
-        free( param_list );
-        return NULL;
-    }
-
-    // JSMN returns OBJECT, KEY, VALUE, ...
-    //  We're expecting at least an object with one key and one value
-    if( json_tokens[0].type != JSMN_OBJECT )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Root element of JSON response is not an object"
-        );
-        free( param_list );
-        free( json_tokens );
-        return NULL;
-    }
-
-    if( max_tokens < 3 )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "JSON response is empty"
-        );
-
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Got '%s', (%d tokens )",
-            json_string,
-            max_tokens
-        );
-
-        free( json_tokens );
-        free( param_list );
-        return NULL;
-    }
-
-    i = 1;
-
-    _log( LOG_LEVEL_DEBUG, "Parsing JSON '%s'", json_string );
-
-    for(;;)
-    {
-        json_key_token = json_tokens[i];
-
-        if( json_key_token.type != JSMN_STRING )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Expected string key in JSON structure (got %d at index %d)",
-                json_key_token.type,
-                i
+    for(
+            key_value_pair = get_next_json_kv_pair(
+                json_string,
+                NULL,
+                &json_error
             );
+            json_error == false && key_value_pair != NULL;
+            key_value_pair = get_next_json_kv_pair(
+                json_string,
+                NULL,
+                &json_error
+            )
+       )
+    {
+        if( json_error == true || key_value_pair == NULL )
+        {
+            if( key_value_pair != NULL )
+            {
+                _free_json_kv( key_value_pair );
+            }
 
-            free( json_tokens );
-            free( param_list );
+            if( param_list != NULL )
+            {
+                free( param_list );
+            }
 
             return NULL;
         }
 
         *malloc_size = *malloc_size
-                     + json_key_token.end
-                     - json_key_token.start
+                     + strlen( key_value_pair->key )
                      + 2;
 
         if( first_param_pass == true )
@@ -1001,8 +811,6 @@ char * _add_json_parameters_to_param_list(
                 "Failed to reallocate memory for parameter string key"
             );
 
-            free( json_tokens );
-
             return NULL;
         }
 
@@ -1013,70 +821,18 @@ char * _add_json_parameters_to_param_list(
 
         first_param_pass = false;
 
-        strncat(
+        strcat(
             param_list,
-            ( char * ) ( json_string + json_key_token.start ),
-            json_key_token.end - json_key_token.start
+            ( char * ) ( key_value_pair->key )
         );
 
         param_list[*malloc_size - 1] = '\0';
 
-        _log(
-            LOG_LEVEL_DEBUG,
-            "PARAM LIST: '%s' (%d)",
-            param_list,
-            *malloc_size
-        );
-
-        i++;
-
-        if( i >= ( max_tokens ) )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Reached unexpected end of JSON object"
-            );
-
-            free( param_list );
-            free( json_tokens );
-
-            return NULL;
-        }
-
-        json_value_token = json_tokens[i];
-
-        value = calloc(
-            json_value_token.end - json_value_token.start + 1,
-            sizeof( char )
-        );
-
-        if( value == NULL )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to allocate memory for URL encoding operation"
-            );
-
-            free( json_tokens );
-            free( param_list );
-
-            return NULL;
-        }
-
-        strncpy(
-            value,
-            ( char * ) ( json_string + json_value_token.start ),
-            json_value_token.end - json_value_token.start
-        );
-
-        value[json_value_token.end - json_value_token.start] = '\0';
         encoded_value = curl_easy_escape(
             curl_handle,
-            ( const char * ) value,
-            strlen( value )
+            ( const char * ) key_value_pair->value,
+            strlen( key_value_pair->value )
         );
-
-        free( value );
 
         if( encoded_value == NULL )
         {
@@ -1085,16 +841,17 @@ char * _add_json_parameters_to_param_list(
                 "URL Encoding operation failed"
             );
 
-            free( json_tokens );
+            _free_json_kv( key_value_pair );
             free( param_list );
 
             return NULL;
         }
 
         *malloc_size = *malloc_size + strlen( encoded_value ) + 2;
+
         param_list = ( char * ) realloc(
             ( char * ) param_list,
-            *malloc_size
+            sizeof( char ) * (*malloc_size)
         );
 
         if( param_list == NULL )
@@ -1104,10 +861,9 @@ char * _add_json_parameters_to_param_list(
                 "Failed to reallocate memory for parameter string value"
             );
 
-            free( json_tokens );
             free( param_list );
             curl_free( encoded_value );
-
+            _free_json_kv( key_value_pair );
             return NULL;
         }
 
@@ -1120,50 +876,19 @@ char * _add_json_parameters_to_param_list(
 
         curl_free( encoded_value );
         param_list[*malloc_size - 1] = '\0';
-
-        if(
-            json_value_token.type == JSMN_OBJECT ||
-            json_value_token.type == JSMN_ARRAY
-          )
-        {
-            // index i to point to the next key by finding the index of the
-            //  first token that is >= our value's end index
-            end_index = json_value_token.end;
-
-            for( j = i; j < max_tokens; j++ )
-            {
-                temp_token = json_tokens[j];
-                if( temp_token.start >= end_index )
-                {
-                    i = j;
-                    break;
-                }
-            }
-
-            // The value which is an object or key somehow was last thing in
-            // our json object
-            i = max_tokens;
-        }
-
-        if( i >=  ( max_tokens - 1 ) )
-        {
-            break;
-        }
-
-        i++;
+        _free_json_kv( key_value_pair );
     }
 
-    free( json_tokens );
     return param_list;
 }
 
 /*
- * jsmntok_t * json_tokenise( char * json, int * token_count )
+ * jsmntok_t * json_tokenise( char * json, unsigned int * token_count )
  *     Converts a JSON string into an array of JSMN tokens
  *
  * Arguments:
- *     char * json:        JSON string to tokenise.
- *     int * token_count:  Count of tokens found within the JSON string.
+ *     char * json:                JSON string to tokenise.
+ *     unsigned int * token_count: Count of tokens found within the JSON string.
  * Return:
  *     jsmntok_t * tokens: Array of JSMN tokens from JSON string.
  *                         NOTE: The caller is responsible for freeing this.
@@ -1171,7 +896,7 @@ char * _add_json_parameters_to_param_list(
  *     - Emits error on failure to allocate memory for a token block.
  *     - Emits error on failure to parse JSON.
  */
-jsmntok_t * json_tokenise( char * json, int * token_count )
+jsmntok_t * json_tokenise( char * json, unsigned int * token_count )
 {
     jsmn_parser  parser  = {0};
     int          jsmn_rc = 0;
@@ -1245,4 +970,540 @@ jsmntok_t * json_tokenise( char * json, int * token_count )
 
     *token_count = jsmn_rc;
     return tokens;
+}
+
+void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
+{
+    struct json_kv * key_value_pair                = NULL;
+    regmatch_t       matches[MAX_REGEX_GROUPS + 1] = {{0}};
+    regex_t          regex                         = {0};
+    char *           bindpoint_search              = NULL;
+    char *           temp_string                   = NULL;
+    unsigned int     bind_length                   = 0;
+    unsigned int     i                             = 0;
+    int              reg_result                    = 0;
+    bool             json_error                    = false;
+
+    if( uri == NULL || (*uri) == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Cannot bind URI arguments to a NULL uri"
+        );
+
+        return;
+    }
+
+    if( parameters == NULL )
+    {
+        // No parameters to bind
+        return;
+    }
+
+    for(
+            key_value_pair = get_next_json_kv_pair(
+                parameters,
+                key_prefix,
+                &json_error
+            );
+            json_error == false && key_value_pair != NULL;
+            key_value_pair = get_next_json_kv_pair(
+                parameters,
+                key_prefix,
+                &json_error
+            )
+       )
+    {
+        if( key_value_pair == NULL || json_error == true )
+        {
+            return;
+        }
+
+        bindpoint_search = ( char * ) calloc(
+            ( strlen( key_value_pair->key ) + 7 ),
+            sizeof( char )
+        );
+
+        if( bindpoint_search == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Could not allocate memory for regular expression search string"
+            );
+
+            _free_json_kv( key_value_pair );
+            return;
+        }
+
+        strcpy( bindpoint_search, "[?]" );
+        strcat( bindpoint_search, key_value_pair->key );
+        strcat( bindpoint_search, "[?]" );
+
+        bindpoint_search[strlen( key_value_pair->key ) + 7] = '\0';
+
+        reg_result = regcomp( &regex, bindpoint_search, REG_EXTENDED );
+
+        if( reg_result != 0 )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to compile regular expression"
+            );
+
+            free( bindpoint_search );
+            _free_json_kv( key_value_pair );
+            return;
+        }
+
+        for( i = 0; i < MAX_REGEX_MATCHES; i++ )
+        {
+            reg_result = regexec(
+                &regex,
+                (*uri),
+                MAX_REGEX_GROUPS,
+                matches,
+                0
+            );
+
+            if( matches[0].rm_so == -1 || reg_result == REG_NOMATCH )
+            {
+                break;
+            }
+            else if( reg_result != 0 )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Failed to execute regular expression"
+                );
+
+                free( bindpoint_search );
+                _free_json_kv( key_value_pair );
+                return;
+            }
+
+            bind_length = matches[0].rm_eo - matches[0].rm_so;
+
+            temp_string = ( char * ) calloc(
+                (
+                    strlen( (*uri) )                // Original string
+                  - bind_length                     // What we are replacing
+                  + strlen( key_value_pair->value ) // What is replacing ^
+                  + 1                               // NULL terminator
+                ),
+                sizeof( char )
+            );
+
+            if( temp_string == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Failed to allocate memory for string resize operation"
+                );
+
+                free( bindpoint_search );
+                _free_json_kv( key_value_pair );
+                return;
+            }
+
+            strncpy(
+                temp_string,
+                (*uri),
+                matches[0].rm_so
+            );
+
+            strcat(
+                temp_string,
+                key_value_pair->value
+            );
+
+            strcat(
+                temp_string,
+                ( char * ) ( (*uri) + matches[0].rm_eo )
+            );
+
+            free( (*uri) );
+
+            // Copy temp_string -> action->uri so we can reuse pointer in next iter
+            (*uri) = ( char * ) calloc(
+                ( strlen( temp_string ) + 1 ),
+                sizeof( char )
+            );
+
+            if( (*uri) == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Failed to allocate memory for string resize operation"
+                );
+
+                free( temp_string );
+                free( bindpoint_search );
+                _free_json_kv( key_value_pair );
+
+                return;
+            }
+
+            strcpy( (*uri), temp_string );
+            (*uri)[strlen( temp_string ) + 1] = '\0';
+            free( temp_string );
+        }
+
+        free( bindpoint_search );
+        regfree( &regex );
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Potentially bound KV %s,%s to %s",
+            key_value_pair->key,
+            key_value_pair->value,
+            (*uri)
+        );
+
+        _free_json_kv( key_value_pair );
+    }
+
+    return;
+}
+
+static struct json_kv * get_next_json_kv_pair(
+    char * json_string,
+    char * key_prefix,
+    bool * error
+)
+{
+    static jsmntok_t *  json_tokens      = NULL;
+    static unsigned int max_tokens       = 0;
+    static unsigned int i                = 0;
+    jsmntok_t           json_key_token   = {0};
+    jsmntok_t           json_value_token = {0};
+    struct json_kv *    result           = NULL;
+
+    (*error) = false;
+
+    if( json_string == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Cannot parse NULL JSON string"
+        );
+
+        // Reset state
+        if( json_tokens != NULL )
+        {
+            free( json_tokens );
+            json_tokens = NULL;
+        }
+
+        i        = 0;
+        (*error) = true;
+
+        return NULL;
+    }
+
+    if( json_tokens == NULL )
+    {
+        // Parse a new JSON string into tokens, set up parser state
+        json_tokens = json_tokenise( json_string, &max_tokens );
+
+        if( json_tokens == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to tokenise JSON string"
+            );
+
+            (*error) = true;
+            i        = 0;
+
+            return NULL;
+        }
+
+        if( json_tokens[0].type != JSMN_OBJECT )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Root element of JSON response is not an object"
+            );
+
+            free( json_tokens );
+
+            json_tokens = NULL;
+            i           = 0;
+            (*error)    = true;
+
+            return NULL;
+        }
+
+        if( max_tokens < 3 )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "JSON to be parsed is empty"
+            );
+
+            free( json_tokens );
+
+            json_tokens = NULL;
+            i           = 0;
+            (*error)    = true;
+
+            return NULL;
+        }
+
+        i = 1;
+
+        _log( LOG_LEVEL_DEBUG, "Parsing JSON '%s'", json_string );
+    }
+    else
+    {
+        // ensure that we do not exceed the bounds of an already allocated
+        // json_tokens array
+        if( i >= ( max_tokens - 1 ) )
+        {
+            return NULL;
+        }
+    }
+
+    json_key_token = json_tokens[i];
+
+    if( json_key_token.type != JSMN_STRING )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Expected string key in JSON structure, got %d at index %d",
+            json_key_token.type,
+            i
+        );
+
+        free( json_tokens );
+
+        json_tokens = NULL;
+        i           = 0;
+        (*error)    = true;
+
+        return NULL;
+    }
+
+    i++;
+
+    if( i >= ( max_tokens ) )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Reached unexpected end of JSON object"
+        );
+
+        free( json_tokens );
+
+        json_tokens = NULL;
+        i           = 0;
+        (*error)    = true;
+
+        return NULL;
+    }
+
+    json_value_token = json_tokens[i];
+    i++;
+
+    result = new_kv_pair(
+        json_string,
+        &json_key_token,
+        &json_value_token,
+        json_tokens,
+        key_prefix,
+        error,
+        &i,
+        &max_tokens
+    );
+
+    if( (*error) == true )
+    {
+        if( result != NULL )
+        {
+            _free_json_kv( result );
+            result = NULL;
+        }
+
+        free( json_tokens );
+        json_tokens = NULL;
+        i           = 0;
+
+        return NULL;
+    }
+
+    return result;
+}
+
+static struct json_kv * new_kv_pair(
+    char *         json_string,
+    jsmntok_t *    json_key_token,
+    jsmntok_t *    json_value_token,
+    jsmntok_t *    json_tokens,
+    char *         key_prefix,
+    bool *         error,
+    unsigned int * i,
+    unsigned int * max_tokens
+)
+{
+    unsigned int     j               = 0;
+    unsigned int     key_size_offset = 0;
+    unsigned int     end_index       = 0;
+    jsmntok_t        temp_token      = {0};
+    char *           key             = NULL;
+    char *           value           = NULL;
+    struct json_kv * result          = NULL;
+    bool             found_st_end    = false;
+
+    if(
+            json_string == NULL
+         || json_key_token == NULL
+         || json_value_token == NULL
+         || json_tokens == NULL
+      )
+    {
+        return NULL;
+    }
+
+    if( key_prefix != NULL )
+    {
+        key_size_offset = strlen( key_prefix );
+    }
+
+    key = ( char * ) calloc(
+        ( json_key_token->end - json_key_token->start + 1 + key_size_offset ),
+        sizeof( char )
+    );
+
+    if( key == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for JSON key"
+        );
+
+        (*error) = true;
+        return NULL;
+    }
+
+    if( key_prefix != NULL )
+    {
+        strcpy( key, key_prefix );
+    }
+
+    strncat(
+        key,
+        ( char * ) ( json_string + json_key_token->start ),
+        json_key_token->end - json_key_token->start
+    );
+
+    key[key_size_offset + json_key_token->end - json_key_token->start] = '\0';
+
+    value = ( char * ) calloc(
+        ( json_value_token->end - json_value_token->start + 1 ),
+        sizeof( char )
+    );
+
+    if( value == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for JSON value"
+        );
+        free( key );
+        (*error) = true;
+        return NULL;
+    }
+
+    strncpy(
+        value,
+        ( char * ) ( json_string + json_value_token->start ),
+        json_value_token->end - json_value_token->start
+    );
+
+    value[json_value_token->end - json_value_token->start] = '\0';
+
+    if(
+           json_value_token->type == JSMN_OBJECT
+        || json_value_token->type == JSMN_ARRAY
+      )
+    {
+        end_index = json_value_token->end;
+
+        // i has already been inremented to point to the next token
+        // (the token that follows json_value_token in json_tokens[])
+        for( j = (*i); j < (*max_tokens); j++ )
+        {
+            temp_token = json_tokens[j];
+
+            if( temp_token.start >= end_index )
+            {
+                (*i) = j;
+                found_st_end = true;
+                break;
+            }
+        }
+
+        if( !found_st_end )
+        {
+            (*i) = (*max_tokens);
+        }
+    }
+
+    if( strcmp( value, "null" ) == 0 || strcmp( value, "NULL" ) == 0 )
+    {
+        free( value );
+        value = NULL;
+    }
+
+    result = ( struct json_kv * ) calloc(
+        1,
+        sizeof( struct json_kv )
+    );
+
+    if( result == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Could not allocate JSON key/value pair"
+        );
+
+        free( key );
+
+        if( value != NULL )
+        {
+            free( value );
+        }
+
+        (*error) = true;
+        return NULL;
+    }
+
+    result->key   = key;
+    result->value = value;
+
+    return result;
+}
+
+static void _free_json_kv( struct json_kv * json_pair )
+{
+    if( json_pair == NULL )
+    {
+        return;
+    }
+
+    if( json_pair->key != NULL )
+    {
+        free( json_pair->key );
+        json_pair->key = NULL;
+    }
+
+    if( json_pair->value != NULL )
+    {
+        free( json_pair->value );
+        json_pair->value = NULL;
+    }
+
+    free( json_pair );
+
+    return;
 }

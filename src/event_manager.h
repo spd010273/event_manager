@@ -25,7 +25,7 @@ struct action_result {
     char * query;
     char * uri;
     char * method;
-    bool use_ssl;
+    bool   use_ssl;
     char * parameters;
     char * static_parameters;
     char * session_values;
