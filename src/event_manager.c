@@ -124,7 +124,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
         _log( LOG_LEVEL_DEBUG, "With params:" );
         for( i = 0; i < param_count; i++ )
         {
-            _log( LOG_LEVEL_DEBUG, "%d: %s", i, params[i] );
+            _log( LOG_LEVEL_DEBUG, "%d (bindpoint $%d): %s", i, i+1, params[i] );
         }
     }
 #endif
@@ -573,14 +573,14 @@ int event_queue_handler( void )
 
     _add_json_parameter_to_query(
         work_item_query_obj,
-        new,
-        "NEW."
+        old,
+        "OLD."
     );
 
     _add_json_parameter_to_query(
         work_item_query_obj,
-        old,
-        "OLD."
+        new,
+        "NEW."
     );
 
     _add_json_parameter_to_query(

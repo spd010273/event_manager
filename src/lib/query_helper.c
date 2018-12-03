@@ -565,6 +565,14 @@ void _add_json_parameter_to_query(
         return;
     }
 
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Adding JSON parameters to query\n"\
+        "string: '%s', prefix: '%s'",
+        json_string,
+        key_prefix
+    );
+
     if( query_obj == NULL )
     {
         _log(
@@ -598,7 +606,7 @@ void _add_json_parameter_to_query(
             )
        )
     {
-        if( key_value_pair == NULL || json_error == true )
+        if( json_error == true )
         {
             _free_query( query_obj );
 
@@ -608,6 +616,11 @@ void _add_json_parameter_to_query(
             }
 
             return;
+        }
+
+        if( key_value_pair == NULL )
+        {
+            break;
         }
 
         _add_parameter_to_query(
@@ -775,7 +788,7 @@ char * _add_json_parameters_to_param_list(
             )
        )
     {
-        if( json_error == true || key_value_pair == NULL )
+        if( json_error == true )
         {
             if( key_value_pair != NULL )
             {
@@ -788,6 +801,11 @@ char * _add_json_parameters_to_param_list(
             }
 
             return NULL;
+        }
+
+        if( key_value_pair == NULL )
+        {
+            break;
         }
 
         *malloc_size = *malloc_size
@@ -902,6 +920,7 @@ jsmntok_t * json_tokenise( char * json, unsigned int * token_count )
     int          jsmn_rc = 0;
     jsmntok_t *  tokens  = NULL;
     unsigned int n       = JSON_TOKENS;
+    unsigned int i       = 0;
 
     jsmn_init( &parser );
 
@@ -969,6 +988,30 @@ jsmntok_t * json_tokenise( char * json, unsigned int * token_count )
     }
 
     *token_count = jsmn_rc;
+
+#ifdef DEBUG
+    _log(
+        LOG_LEVEL_DEBUG,
+        "JSON string is:\n%s\n(Got %d tokens from this JSON string)",
+        json,
+        jsmn_rc
+    );
+
+    for( i = 0; i < *token_count; i++ )
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "JSON Token %d:\n"\
+            "type: %s\nstart: %d\nend: %d\nsize: %d",
+            i,
+            tokens[i].type == 0 ? "UNDEFINED" : tokens[i].type == 1 ? "OBJECT" : tokens[i].type == 2 ? "ARRAY" : tokens[i].type == 3 ? "STRING" : tokens[i].type == 4 ? "PRIMITIVE" : "UNKNOWN",
+            tokens[i].start,
+            tokens[i].end,
+            tokens[i].size
+        );
+    }
+#endif //DEBUG
+
     return tokens;
 }
 
@@ -1260,8 +1303,31 @@ static struct json_kv * get_next_json_kv_pair(
         // json_tokens array
         if( i >= ( max_tokens - 1 ) )
         {
+            i = 0;
+            max_tokens = 0;
+
+            if( json_tokens != NULL )
+            {
+                free( json_tokens );
+                json_tokens = NULL;
+            }
+
             return NULL;
         }
+    }
+
+    // Handle the case where i is at max_tokens
+    if( i >= max_tokens )
+    {
+        (*error) = false;
+        i = 0;
+        max_tokens = 0;
+        if( json_tokens != NULL )
+        {
+            free( json_tokens );
+            json_tokens = NULL;
+        }
+        return NULL;
     }
 
     json_key_token = json_tokens[i];
@@ -1288,6 +1354,7 @@ static struct json_kv * get_next_json_kv_pair(
 
     if( i >= ( max_tokens ) )
     {
+        // Bounds checking
         _log(
             LOG_LEVEL_ERROR,
             "Reached unexpected end of JSON object"
@@ -1428,17 +1495,30 @@ static struct json_kv * new_kv_pair(
       )
     {
         end_index = json_value_token->end;
-
+        _log( LOG_LEVEL_DEBUG, "I'm in a nested struct, my end index is %d", end_index );
         // i has already been inremented to point to the next token
         // (the token that follows json_value_token in json_tokens[])
         for( j = (*i); j < (*max_tokens); j++ )
         {
             temp_token = json_tokens[j];
+            _log(
+                LOG_LEVEL_DEBUG,
+                "token T: %d, S: %d E: %d size: %d",
+                temp_token.type,
+                temp_token.start,
+                temp_token.end,
+                temp_token.size
+            );
 
             if( temp_token.start >= end_index )
             {
                 (*i) = j;
                 found_st_end = true;
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "I've found the end of the JSON sub object / array @ index %d",
+                    temp_token.start
+                );
                 break;
             }
         }
@@ -1446,6 +1526,7 @@ static struct json_kv * new_kv_pair(
         if( !found_st_end )
         {
             (*i) = (*max_tokens);
+            _log( LOG_LEVEL_DEBUG, "I HAVE PUSHED THE STRING POINTER TO %d", *max_tokens );
         }
     }
 
