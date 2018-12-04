@@ -33,7 +33,7 @@ use File::Temp;
 use File::Glob;
 
 Readonly my $VERSION => '0.1';
-Readonly my $TESTDIR => './test/';
+Readonly my $TESTDIR => './test/sql/';
 Readonly my $VALGRIND_PREFIX => "valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all ";
 Readonly my $USAGE_MESSAGE => <<"USAGE";
 Usage:

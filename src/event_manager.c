@@ -1428,13 +1428,29 @@ bool execute_action( PGresult * result, int row )
     struct action_result action  = {0};
     struct action_result * action_ptr = NULL;
     char * use_ssl = NULL;
+    char * uri     = NULL; // Copy string
 
     action_ptr               = &action;
     action.parameters        = get_column_value( row, result, "parameters" );
     action.uid               = get_column_value( row, result, "uid" );
     action.recorded          = get_column_value( row, result, "recorded" );
     action.session_values    = get_column_value( row, result, "session_values" );
-    action.uri               = get_column_value( row, result, "uri" );
+
+    uri = get_column_value( row, result, "uri" );
+
+    if( uri == NULL || is_column_null( row, result, "uri" ) )
+    {
+        action.uri = NULL;
+    }
+    else
+    {
+        action.uri = ( char * ) calloc(
+            strlen( uri ) + 1,
+            sizeof( char )
+        );
+
+        strcpy( action.uri, uri );
+    }
 
     if( is_column_null( row, result, "static_parameters" ) == false )
     {
@@ -1494,6 +1510,7 @@ bool execute_action( PGresult * result, int row )
         execute_action_result = false;
     }
 
+    free( action.uri );
     return execute_action_result;
 }
 

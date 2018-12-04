@@ -380,6 +380,7 @@ void _add_parameter_to_query(
 
         if( matches[0].rm_so == -1 || reg_result == REG_NOMATCH )
         {
+            _log( LOG_LEVEL_DEBUG, "No match for key '%s'", bindpoint_search );
             break;
         }
         else if( reg_result != 0 )
@@ -396,6 +397,8 @@ void _add_parameter_to_query(
 
             return;
         }
+       
+        _log( LOG_LEVEL_DEBUG, "Found match for key '%s'", bindpoint_search );
 
         bind_counter++;
 
@@ -465,6 +468,7 @@ void _add_parameter_to_query(
             return;
         }
 
+        _log( LOG_LEVEL_DEBUG, "Temp query is '%s'", temp_query );
         strcpy( query_object->query_string, temp_query );
         query_object->length = strlen( temp_query );
         free( temp_query );
@@ -808,6 +812,33 @@ char * _add_json_parameters_to_param_list(
             break;
         }
 
+        if( key_value_pair->value == NULL )
+        {
+            // \0 is fine for SQL, but will pre-terminate a URI string. We will replace
+            // \0 with string NULL
+            key_value_pair->value = ( char * ) calloc(
+                5,
+                sizeof( char )
+            );
+
+            if( key_value_pair->value == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Failed to allocate string :("
+                );
+                _free_json_kv( key_value_pair );
+
+                if( param_list != NULL )
+                {
+                    free( param_list );
+                }
+                return NULL;
+            }
+
+            strcpy( key_value_pair->value, "NULL" );
+        }
+
         *malloc_size = *malloc_size
                      + strlen( key_value_pair->key )
                      + 2;
@@ -846,6 +877,7 @@ char * _add_json_parameters_to_param_list(
 
         param_list[*malloc_size - 1] = '\0';
 
+        _log( LOG_LEVEL_DEBUG, "My key_value_pair->Value: '%s'", key_value_pair->value );
         encoded_value = curl_easy_escape(
             curl_handle,
             ( const char * ) key_value_pair->value,
@@ -920,7 +952,6 @@ jsmntok_t * json_tokenise( char * json, unsigned int * token_count )
     int          jsmn_rc = 0;
     jsmntok_t *  tokens  = NULL;
     unsigned int n       = JSON_TOKENS;
-    unsigned int i       = 0;
 
     jsmn_init( &parser );
 
@@ -989,29 +1020,6 @@ jsmntok_t * json_tokenise( char * json, unsigned int * token_count )
 
     *token_count = jsmn_rc;
 
-#ifdef DEBUG
-    _log(
-        LOG_LEVEL_DEBUG,
-        "JSON string is:\n%s\n(Got %d tokens from this JSON string)",
-        json,
-        jsmn_rc
-    );
-
-    for( i = 0; i < *token_count; i++ )
-    {
-        _log(
-            LOG_LEVEL_DEBUG,
-            "JSON Token %d:\n"\
-            "type: %s\nstart: %d\nend: %d\nsize: %d",
-            i,
-            tokens[i].type == 0 ? "UNDEFINED" : tokens[i].type == 1 ? "OBJECT" : tokens[i].type == 2 ? "ARRAY" : tokens[i].type == 3 ? "STRING" : tokens[i].type == 4 ? "PRIMITIVE" : "UNKNOWN",
-            tokens[i].start,
-            tokens[i].end,
-            tokens[i].size
-        );
-    }
-#endif //DEBUG
-
     return tokens;
 }
 
@@ -1057,9 +1065,15 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
             )
        )
     {
-        if( key_value_pair == NULL || json_error == true )
+        if( json_error == true )
         {
             return;
+        }
+
+        if( key_value_pair == NULL )
+        {
+            // nothing left to process
+            break;
         }
 
         bindpoint_search = ( char * ) calloc(
@@ -1082,7 +1096,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
         strcat( bindpoint_search, key_value_pair->key );
         strcat( bindpoint_search, "[?]" );
 
-        bindpoint_search[strlen( key_value_pair->key ) + 7] = '\0';
+        bindpoint_search[strlen( key_value_pair->key ) + 6] = '\0';
 
         reg_result = regcomp( &regex, bindpoint_search, REG_EXTENDED );
 
@@ -1187,7 +1201,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
             }
 
             strcpy( (*uri), temp_string );
-            (*uri)[strlen( temp_string ) + 1] = '\0';
+            (*uri)[strlen( temp_string )] = '\0';
             free( temp_string );
         }
 
