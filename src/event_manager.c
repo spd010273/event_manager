@@ -36,7 +36,7 @@
 
 /* Constants */
 #define MAX_CONN_RETRIES 3
-
+#define API_CALL_TIMEOUT 300L
 // Channels
 #define EVENT_QUEUE_CHANNEL "new_event_queue_item"
 #define WORK_QUEUE_CHANNEL "new_work_queue_item"
@@ -83,7 +83,7 @@ sig_atomic_t got_sigterm = false;
  * Return:
  *     PGresult * result: Result handle of the executed query.
  * Error Conditions:
- *     - Returns NULL on error.
+ *     - Returns NULL on 5950fdfc-b656-6aae-3d45-bfd2df2f28c9error.
  *     - Emits error on failure to execute query.
  *     - Emits error on disconnection of DB handle.
  *     - Emits error on syntax or improper termination of query.
@@ -962,6 +962,11 @@ static size_t _curl_write_callback(
     response_page->size += real_size;
     response_page->pointer[response_page->size] = 0;
 
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Writer callback called, resized response buffer to: %lu",
+        real_size
+    );
     return real_size;
 }
 
@@ -1014,7 +1019,7 @@ bool execute_remote_uri_call( struct action_result * action )
         return false;
     }
 
-    if( strcmp( action->method, "GET" ) == 0 )
+    if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
     {
         strcpy( param_list, "?" );
     }
@@ -1117,17 +1122,25 @@ bool execute_remote_uri_call( struct action_result * action )
         if( strcmp( action->method, "GET" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting GET method" );
-            response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1 );
+            response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1L );
         }
         else if( strcmp( action->method, "PUT" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
-            response = curl_easy_setopt( curl_handle, CURLOPT_PUT, 1 );
+            // CURLOPT_PUT is deprecated
+            // TODO: Set the Content-type appropriately and the server ///should/// accept
+            // POSTFIELDS for a PUT as per REST standard, but libcurl has deparecated
+            // CURLOPT_PUT, so we use CUSTOMREQUEST.
+            //
+            // Right now, we're just hijacking GET logic to send our parameters, otherwise
+            // the curl call for PUTs will deadlock and hang, as we are not actually uploading
+            // a file. And the timeout doesn't seem to work either :)
+            response = curl_easy_setopt( curl_handle, CURLOPT_CUSTOMREQUEST, "PUT" );
         }
         else if( strcmp( action->method, "POST" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting POST method" );
-            response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1 );
+            response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1L );
         }
         else
         {
@@ -1150,11 +1163,23 @@ bool execute_remote_uri_call( struct action_result * action )
             return false;
         }
 
+        response = curl_easy_setopt( curl_handle, CURLOPT_TIMEOUT, API_CALL_TIMEOUT );
+        
+        if( response != CURLE_OK )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to set curl TIMEOUT opt %s",
+                curl_easy_strerror( response )
+            );
+            return false;
+        }
+
         // Initialize buffer
         write_buffer.pointer = malloc( 1 );
         write_buffer.size = 0;
 
-        if( strcmp( action->method, "GET" ) == 0 )
+        if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
         {
             _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
             remote_call = ( char * ) calloc(
@@ -1182,6 +1207,17 @@ bool execute_remote_uri_call( struct action_result * action )
                 remote_call
             );
         }
+/*
+        else if( strcmp( action->method, "PUT" ) == 0 )
+        {
+            remote_call = action->uri;
+            curl_easy_setopt(
+                curl_handle,
+                CURLOPT_READDATA,
+                ( void * ) param_list
+            );
+        }
+*/
         else
         {
             // Set post fields for PUT / POST
@@ -1230,6 +1266,7 @@ bool execute_remote_uri_call( struct action_result * action )
                 param_list
             );
             response = curl_easy_perform( curl_handle );
+            _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
         }
 
         free( param_list );
