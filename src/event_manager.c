@@ -1108,229 +1108,189 @@ bool execute_remote_uri_call( struct action_result * action )
         }
     }
 
-    if( enable_curl )
+    if( !enable_curl )
     {
-        //Get: CURLOPT_HTTPGET
-        //Post: CURLOPT_POST
-        //Put: CURLOPT_PUT
         _log(
-            LOG_LEVEL_DEBUG,
-            "Curl is enabled, setting method to %s",
-            action->method
+            LOG_LEVEL_ERROR,
+            "Could not make remote API call: %s, curl is disabled",
+            action->uri
         );
 
-        if( strcmp( action->method, "GET" ) == 0 )
+        if( param_list != NULL )
         {
-            _log( LOG_LEVEL_DEBUG, "Setting GET method" );
-            response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1L );
-        }
-        else if( strcmp( action->method, "PUT" ) == 0 )
-        {
-            _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
-            // CURLOPT_PUT is deprecated
-            // TODO: Set the Content-type appropriately and the server ///should/// accept
-            // POSTFIELDS for a PUT as per REST standard, but libcurl has deparecated
-            // CURLOPT_PUT, so we use CUSTOMREQUEST.
-            //
-            // Right now, we're just hijacking GET logic to send our parameters, otherwise
-            // the curl call for PUTs will deadlock and hang, as we are not actually uploading
-            // a file. And the timeout doesn't seem to work either :)
-            response = curl_easy_setopt( curl_handle, CURLOPT_CUSTOMREQUEST, "PUT" );
-        }
-        else if( strcmp( action->method, "POST" ) == 0 )
-        {
-            _log( LOG_LEVEL_DEBUG, "Setting POST method" );
-            response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1L );
-        }
-        else
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Unsupported method: %s",
-                action->method
-            );
-
-            return false;
+            free( param_list );
+            param_list = NULL;
         }
 
-        if( response != CURLE_OK )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to set curl method: %s",
-                curl_easy_strerror( response )
-            );
-            return false;
-        }
+        return false;
+    }
 
-        response = curl_easy_setopt( curl_handle, CURLOPT_TIMEOUT, API_CALL_TIMEOUT );
-        
-        if( response != CURLE_OK )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed to set curl TIMEOUT opt %s",
-                curl_easy_strerror( response )
-            );
-            return false;
-        }
+    //Get: CURLOPT_HTTPGET
+    //Post: CURLOPT_POST
+    //Put: CURLOPT_PUT
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Curl is enabled, setting method to %s",
+        action->method
+    );
 
-        // Initialize buffer
-        write_buffer.pointer = malloc( 1 );
-        write_buffer.size = 0;
-
-        if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
-        {
-            _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
-            remote_call = ( char * ) calloc(
-                ( strlen( action->uri ) + strlen( param_list ) + 1 ),
-                sizeof( char )
-            );
-
-            if( remote_call == NULL )
-            {
-                _log(
-                    LOG_LEVEL_ERROR,
-                    "Unable to prep final remote call string"
-                );
-                free( param_list );
-                free( write_buffer.pointer );
-                return false;
-            }
-
-            strcpy( remote_call, action->uri );
-            strcat( remote_call, param_list );
-
-            _log(
-                LOG_LEVEL_DEBUG,
-                "Making remote call to URI: %s",
-                remote_call
-            );
-        }
-/*
-        else if( strcmp( action->method, "PUT" ) == 0 )
-        {
-            remote_call = action->uri;
-            curl_easy_setopt(
-                curl_handle,
-                CURLOPT_READDATA,
-                ( void * ) param_list
-            );
-        }
-*/
-        else
-        {
-            // Set post fields for PUT / POST
-            remote_call = action->uri;
-            curl_easy_setopt(
-                curl_handle,
-                CURLOPT_POSTFIELDS,
-                param_list
-            );
-        }
-
-        if( action->use_ssl )
-        {
-            response = curl_easy_setopt(
-                curl_handle,
-                CURLOPT_USE_SSL,
-                CURLUSESSL_TRY
-            );
-        }
-
-        response = curl_easy_setopt(
-            curl_handle,
-            CURLOPT_URL,
-            remote_call
-        );
-
-        _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
-        response = curl_easy_setopt(
-            curl_handle,
-            CURLOPT_WRITEFUNCTION,
-            _curl_write_callback
-        );
-
-        response = curl_easy_setopt(
-            curl_handle,
-            CURLOPT_WRITEDATA,
-            ( void * ) &write_buffer
-        );
-
-        if( response == CURLE_OK )
-        {
-            _log(
-                LOG_LEVEL_DEBUG,
-                "Making %s call with param list %s",
-                action->method,
-                param_list
-            );
-            response = curl_easy_perform( curl_handle );
-            _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
-        }
-
-        free( param_list );
-
-        if( response != CURLE_OK )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Failed %s %s: %s",
-                action->method,
-                remote_call,
-                curl_easy_strerror( response )
-            );
-
-            free( write_buffer.pointer );
-
-            if(
-                  strcmp( action->method, "GET" ) == 0
-               || strcmp( action->method, "PUT" ) == 0
-              )
-            {
-                if( remote_call != NULL )
-                {
-                    free( remote_call );
-                    remote_call = NULL;
-                }
-            }
-
-            return false;
-        }
-
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Got response: '%s'",
-            write_buffer.pointer
-        );
-
-        free( write_buffer.pointer );
-
-        if(
-                strcmp( action->method, "GET" ) == 0
-             || strcmp( action->method, "PUT" ) == 0
-          )
-        {
-            if( remote_call != NULL )
-            {
-                free( remote_call );
-                remote_call = NULL;
-            }
-        }
-
-        return true;
+    if( strcmp( action->method, "GET" ) == 0 )
+    {
+        _log( LOG_LEVEL_DEBUG, "Setting GET method" );
+        response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1L );
+    }
+    else if( strcmp( action->method, "PUT" ) == 0 )
+    {
+        _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
+        // CURLOPT_PUT is deprecated
+        // TODO: Set the Content-type appropriately and the server ///should/// accept
+        // POSTFIELDS for a PUT as per REST standard, but libcurl has deparecated
+        // CURLOPT_PUT, so we use CUSTOMREQUEST.
+        //
+        // Right now, we're just hijacking GET logic to send our parameters, otherwise
+        // the curl call for PUTs will deadlock and hang, as we are not actually uploading
+        // a file. And the timeout doesn't seem to work either :)
+        response = curl_easy_setopt( curl_handle, CURLOPT_CUSTOMREQUEST, "PUT" );
+    }
+    else if( strcmp( action->method, "POST" ) == 0 )
+    {
+        _log( LOG_LEVEL_DEBUG, "Setting POST method" );
+        response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1L );
     }
     else
     {
         _log(
             LOG_LEVEL_ERROR,
-            "Could not make remote API call: %s, curl is disabled",
-            remote_call
+            "Unsupported method: %s",
+            action->method
         );
 
+        return false;
+    }
+
+    if( response != CURLE_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to set curl method: %s",
+            curl_easy_strerror( response )
+        );
+        return false;
+    }
+
+    response = curl_easy_setopt( curl_handle, CURLOPT_TIMEOUT, API_CALL_TIMEOUT );
+    
+    if( response != CURLE_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to set curl TIMEOUT opt %s",
+            curl_easy_strerror( response )
+        );
+        return false;
+    }
+
+    // Initialize buffer
+    write_buffer.pointer = malloc( 1 );
+    write_buffer.size = 0;
+
+    if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
+    {
+        _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
+
+        remote_call = ( char * ) calloc(
+            ( strlen( action->uri ) + strlen( param_list ) + 1 ),
+            sizeof( char )
+        );
+
+        if( remote_call == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Unable to prep final remote call string"
+            );
+            free( param_list );
+            free( write_buffer.pointer );
+            return false;
+        }
+
+        strcpy( remote_call, action->uri );
+        strcat( remote_call, param_list );
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Making remote call to URI: %s",
+            remote_call
+        );
+    }
+    else
+    {
+        // Set post fields for PUT / POST
+        remote_call = action->uri;
+        curl_easy_setopt(
+            curl_handle,
+            CURLOPT_POSTFIELDS,
+            param_list
+        );
+    }
+
+    if( action->use_ssl )
+    {
+        response = curl_easy_setopt(
+            curl_handle,
+            CURLOPT_USE_SSL,
+            CURLUSESSL_TRY
+        );
+    }
+
+    response = curl_easy_setopt(
+        curl_handle,
+        CURLOPT_URL,
+        remote_call
+    );
+
+    _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
+    response = curl_easy_setopt(
+        curl_handle,
+        CURLOPT_WRITEFUNCTION,
+        _curl_write_callback
+    );
+
+    response = curl_easy_setopt(
+        curl_handle,
+        CURLOPT_WRITEDATA,
+        ( void * ) &write_buffer
+    );
+
+    if( response == CURLE_OK )
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Making %s call with param list %s",
+            action->method,
+            param_list
+        );
+        response = curl_easy_perform( curl_handle );
+        _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
+    }
+
+    free( param_list );
+
+    if( response != CURLE_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed %s %s: %s",
+            action->method,
+            remote_call,
+            curl_easy_strerror( response )
+        );
+
+        free( write_buffer.pointer );
+
         if(
-                strcmp( action->method, "GET" ) == 0
-             || strcmp( action->method, "PUT" ) == 0
+              strcmp( action->method, "GET" ) == 0
+           || strcmp( action->method, "PUT" ) == 0
           )
         {
             if( remote_call != NULL )
@@ -1343,9 +1303,17 @@ bool execute_remote_uri_call( struct action_result * action )
         return false;
     }
 
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Got response: '%s'",
+        write_buffer.pointer
+    );
+
+    free( write_buffer.pointer );
+
     if(
-          strcmp( action->method, "GET" ) == 0
-       || strcmp( action->method, "PUT" ) == 0
+            strcmp( action->method, "GET" ) == 0
+         || strcmp( action->method, "PUT" ) == 0
       )
     {
         if( remote_call != NULL )
