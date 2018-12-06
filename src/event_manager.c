@@ -1282,10 +1282,19 @@ bool execute_remote_uri_call( struct action_result * action )
             );
 
             free( write_buffer.pointer );
-            if( strcmp( action->method, "GET" ) == 0 )
+
+            if(
+                  strcmp( action->method, "GET" ) == 0
+               || strcmp( action->method, "PUT" ) == 0
+              )
             {
-                free( remote_call );
+                if( remote_call != NULL )
+                {
+                    free( remote_call );
+                    remote_call = NULL;
+                }
             }
+
             return false;
         }
 
@@ -1297,9 +1306,16 @@ bool execute_remote_uri_call( struct action_result * action )
 
         free( write_buffer.pointer );
 
-        if( strcmp( action->method, "GET" ) == 0 )
+        if(
+                strcmp( action->method, "GET" ) == 0
+             || strcmp( action->method, "PUT" ) == 0
+          )
         {
-            free( remote_call );
+            if( remote_call != NULL )
+            {
+                free( remote_call );
+                remote_call = NULL;
+            }
         }
 
         return true;
@@ -1312,17 +1328,31 @@ bool execute_remote_uri_call( struct action_result * action )
             remote_call
         );
 
-        if( strcmp( action->method, "GET" ) == 0 )
+        if(
+                strcmp( action->method, "GET" ) == 0
+             || strcmp( action->method, "PUT" ) == 0
+          )
         {
-            free( remote_call );
+            if( remote_call != NULL )
+            {
+                free( remote_call );
+                remote_call = NULL;
+            }
         }
 
         return false;
     }
 
-    if( strcmp( action->method, "GET" ) == 0 )
+    if(
+          strcmp( action->method, "GET" ) == 0
+       || strcmp( action->method, "PUT" ) == 0
+      )
     {
-        free( remote_call );
+        if( remote_call != NULL )
+        {
+            free( remote_call );
+            remote_call = NULL;
+        }
     }
 
     return true;
