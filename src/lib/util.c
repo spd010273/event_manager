@@ -301,6 +301,9 @@ void _log( char * log_level, char * message, ... )
     return;
 }
 
+/*
+ *
+ */
 void free_worker( struct worker * worker )
 {
     if( worker == NULL )
@@ -325,8 +328,22 @@ void free_worker( struct worker * worker )
         worker->curl_handle = NULL;
         //curl_global_cleanup();
     }
+
+    munmap( worker, sizeof( struct worker ) );
+    return;
 }
 
+/*
+ *  bool parent_init( void )
+ *      Initial special (initial) call to new_worker for parent process
+ *   
+ *   Arguments:
+ *      None
+ *   Return:
+ *      true on success, false on error
+ *   Error Conditions:
+ *      Same failure scenarios as new_worker()
+ */ 
 bool parent_init( void )
 {
     parent = new_worker( WORKER_TYPE_PARENT, 0, NULL );
@@ -339,7 +356,36 @@ bool parent_init( void )
     return true;
 }
 
-struct worker * new_worker( unsigned short type, unsigned int id, void (*function)( void * ) )
+/*
+ * struct worker * new_worker(
+ *     unsigned short type,
+ *     unsigned int id,
+ *     void (*function)( void * )
+ * )
+ * Sets up workers[] array for parent process or spawns a worker process
+ *
+ * Arguments:
+ *     unsigned_short type: Worker type, either:
+ *              WORKER_TYPE_PARENT,
+ *              WORKER_TYPE_WORK_PROCESSOR
+ *           or WORKER_TYPE_EVENT_PROCESSOR
+ *                          which determines what type of table entry is
+ *                          created, and whether a fork() should happen.
+ *     int id:              Array index for the process in the workers array
+ *     void (*function)( void * ): Routine pointer to the function
+ *                                 the forked child will run. This function
+ *                                 is passed the child's workers[] entry
+ *  Return:
+ *     struct worker * worker - The worker structure of the process
+ *                              (either parent, or forked child)
+ *  Error Conditions:
+ *      Emits error on invalid arguments, failure to allocate memory
+ */
+struct worker * new_worker(
+    unsigned short type,
+    unsigned int   id,
+    void (*function)( void * )
+)
 {
     struct worker * result = NULL;
     pid_t           pid    = 0;
@@ -676,11 +722,15 @@ void __term( void )
         {
             if( workers[i] != NULL )
             {
+                kill( workers[i]->pid, SIGTERM );
+                waitpid( workers[i]->pid, NULL, WNOHANG );
                 free_worker( workers[i] );
+                workers[i] = NULL;
             }
         }
 
-        free( workers );
+        munmap( workers, sizeof( struct worker * ) * ( work_jobs + event_jobs ) );
+        workers = NULL;
         free_worker( parent );
     }
 

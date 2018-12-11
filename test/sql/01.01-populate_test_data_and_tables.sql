@@ -17,7 +17,7 @@ CREATE TABLE eventmanagertest.tb_b
     b INTEGER PRIMARY KEY DEFAULT nextval('eventmanagertest.sq_b'),
     foo VARCHAR,
     bar VARCHAR,
-    a INTEGER REFERENCES tb_a
+    a INTEGER REFERENCES eventmanagertest.tb_a
 );
 
 INSERT INTO eventmanagertest.tb_b

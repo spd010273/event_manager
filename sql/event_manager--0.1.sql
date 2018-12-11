@@ -156,7 +156,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     work_item_query         TEXT NOT NULL,
     when_function           VARCHAR DEFAULT @extschema@.fn_get_config( '@extschema@.default_when_function' ),
     op                      CHAR(1)[],
-    execute_asynchronously  BOOLEAN DEFAULT @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN,
+    execute_asynchronously  BOOLEAN DEFAULT COALESCE( @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN, TRUE ),
     inverse_event           INTEGER REFERENCES @extschema@.tb_event_table_work_item,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
@@ -847,7 +847,7 @@ BEGIN
         RAISE DEBUG '@extschema@: work processing - final query is %', my_query;
     END IF;
 
-    EXECUTE my_set_uid_function;
+    EXECUTE my_set_uid_query;
     EXECUTE my_query;
 
     PERFORM p.proname
