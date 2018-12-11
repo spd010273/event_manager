@@ -14,60 +14,11 @@
 // Compile with -DDEBUG to get debug messages
 
 /* Includes */
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <stdbool.h>
-#include <math.h>
-#include <libpq-fe.h>
-#include <string.h>
-#include <errno.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <time.h>
-#include <signal.h>
-
-#include <curl/curl.h>
 #include "event_manager.h"
-#include "lib/util.h"
-#include "lib/strings.h"
-#include "lib/query_helper.h"
-#include "lib/jsmn/jsmn.h"
-
-/* Constants */
-#define MAX_CONN_RETRIES 3
-#define API_CALL_TIMEOUT 300L
-// Channels
-#define EVENT_QUEUE_CHANNEL "new_event_queue_item"
-#define WORK_QUEUE_CHANNEL "new_work_queue_item"
-
-// GUCs
-#define DEFAULT_WHEN_GUC_NAME "default_when_function"
-#define SET_UID_GUC_NAME "set_uid_function"
-#define GET_UID_GUC_NAME "get_uid_function"
-#define ASYNC_GUC_NAME "execute_asynchronously"
-
-// Regular Expression Settings
-#define MAX_REGEX_GROUPS 1
-#define MAX_REGEX_MATCHES 100
-
-// SQL States
-#define SQL_STATE_TERMINATED_BY_ADMINISTRATOR "57P01"
-#define SQL_STATE_CANCELED_BY_ADMINISTRATOR "57014"
 
 // Global Variables
-PGconn * conn                = NULL;
-char *   ext_schema          = NULL;
-bool     cyanaudit_installed = false;
-bool     enable_curl         = false;
-CURL *   curl_handle         = NULL;
-bool     tx_in_progress      = false;
-
-// Flags
-sig_atomic_t got_sighup  = false;
-sig_atomic_t got_sigterm = false;
-
-/* Functions */
+char * ext_schema          = NULL;
+bool   cyanaudit_installed = false;
 
 /*
  * PGresult * _execute_query( char * query, char ** params, int param_count )
@@ -83,12 +34,15 @@ sig_atomic_t got_sigterm = false;
  * Return:
  *     PGresult * result: Result handle of the executed query.
  * Error Conditions:
- *     - Returns NULL on 5950fdfc-b656-6aae-3d45-bfd2df2f28c9error.
+ *     - Returns NULL on error.
  *     - Emits error on failure to execute query.
  *     - Emits error on disconnection of DB handle.
  *     - Emits error on syntax or improper termination of query.
  */
-PGresult * _execute_query( char * query, char ** params, int param_count )
+
+// Added conn as first parameter, to be called with each thread's conn like &(conns[i]) or &parent_conn, as it may
+// redefine if the conn is interrupted
+PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
 {
     PGresult * result            = NULL;
     int        retry_counter     = 0;
@@ -98,9 +52,9 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
     int        i = 0;
 #endif
 
-    if( conn == NULL )
+    if( me->conn == NULL )
     {
-        if( tx_in_progress )
+        if( me->tx_in_progress )
         {
             _log(
                 LOG_LEVEL_ERROR,
@@ -109,7 +63,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
             return NULL;
         }
 
-        conn = PQconnectdb( conninfo );
+        me->conn= PQconnectdb( conninfo );
     }
 
 #ifdef DEBUG
@@ -130,27 +84,27 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
 #endif
 
     while(
-            PQstatus( conn ) != CONNECTION_OK &&
+            PQstatus( me->conn ) != CONNECTION_OK &&
             retry_counter < MAX_CONN_RETRIES
          )
     {
 
-        if( tx_in_progress )
+        if( me->tx_in_progress )
         {
             _log(
                 LOG_LEVEL_ERROR,
                 "Failed to connect to DB server (%s), while in a transaction."
                 "Transaction was automatically aborted",
-                PQerrorMessage( conn )
+                PQerrorMessage( me->conn )
             );
-            tx_in_progress = false;
+            me->tx_in_progress = false;
             return NULL;
         }
 
         _log(
             LOG_LEVEL_WARNING,
             "Failed to connect to DB server (%s). Retrying...",
-            PQerrorMessage( conn )
+            PQerrorMessage( me->conn )
         );
 
         _log(
@@ -162,7 +116,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
         retry_counter++;
         last_backoff_time = (int) ( 10 * ( rand() / RAND_MAX ) ) + last_backoff_time;
 
-        if( conn != NULL )
+        if( me->conn != NULL )
         {
             _log(
                 LOG_LEVEL_DEBUG,
@@ -170,11 +124,11 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
                 last_backoff_time
             );
 
-            PQfinish( conn );
+            PQfinish( me->conn );
         }
 
         sleep( last_backoff_time );
-        conn = PQconnectdb( conninfo );
+        me->conn = PQconnectdb( conninfo );
     }
 
     _log(
@@ -199,12 +153,12 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
     {
         if( params == NULL )
         {
-            result = PQexec( conn, query );
+            result = PQexec( me->conn, query );
         }
         else
         {
             result = PQexecParams(
-                conn,
+                me->conn,
                 query,
                 param_count,
                 NULL,
@@ -226,7 +180,7 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
                 LOG_LEVEL_ERROR,
                 "Query '%s' failed: %s",
                 query,
-                PQerrorMessage( conn )
+                PQerrorMessage( me->conn )
             );
 
             last_sql_state = PQresultErrorField( result, PG_DIAG_SQLSTATE );
@@ -270,7 +224,8 @@ PGresult * _execute_query( char * query, char ** params, int param_count )
  *     - Emits error when listen channel cannot be bound with select().
  *     - Emits error when a SIGTERM is received.
  */
-void _queue_loop( const char * channel, int (*dequeue_function)(void) )
+void _queue_loop( struct worker * me )
+//const char * channel, int (*dequeue_function)(void) )
 {
     PGnotify * notify          = NULL;
     char *     listen_command  = NULL;
@@ -283,7 +238,7 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
         "Processing queue entries prior to entering main loop"
     );
 
-    while( (*dequeue_function)() > 0 )
+    while( me->dequeue_function( me ) > 0 )
     {
         processed_count++;
     }
@@ -300,7 +255,7 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
     }
 
     listen_command = ( char * ) calloc(
-        ( strlen( channel ) + 10 ),
+        ( strlen( me->channel ) + 10 ),
         sizeof( char )
     );
 
@@ -314,10 +269,11 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
 
     /* Command: 'LISTEN "?"\0' */
     strcpy( listen_command, "LISTEN \"" );
-    strcat( listen_command, ( const char * ) channel );
+    strcat( listen_command, ( const char * ) me->channel );
     strcat( listen_command, "\"\0" );
 
     listen_result = _execute_query(
+        me,
         listen_command,
         NULL,
         0
@@ -352,7 +308,7 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
 #ifdef BLOCKING_SELECT
         sigaddset( &signal_set, SIGTERM );
 #endif
-        sock = PQsocket( conn );
+        sock = PQsocket( me->conn );
 
         if( sock < 0 )
         {
@@ -386,9 +342,9 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
             "Handling notify"
         );
 
-        PQconsumeInput( conn );
+        PQconsumeInput( me->conn );
 
-        while( ( notify = PQnotifies( conn ) ) != NULL )
+        while( ( notify = PQnotifies( me->conn ) ) != NULL )
         {
             _log(
                 LOG_LEVEL_DEBUG,
@@ -401,7 +357,7 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
 
             // Get queue item
             PQfreemem( notify );
-            while( (*dequeue_function)() > 0 )
+            while( me->dequeue_function( me ) > 0 )
             {
                 processed_count++;
             }
@@ -453,7 +409,7 @@ void _queue_loop( const char * channel, int (*dequeue_function)(void) )
  *              - Deletion of dequeued queue item
  *              - commit of transaction
  */
-int event_queue_handler( void )
+int event_queue_handler( struct worker * me )
 {
     PGresult * result           = NULL;
     PGresult * work_item_result = NULL;
@@ -483,7 +439,7 @@ int event_queue_handler( void )
     char * params[9]  = {NULL};
     int    i          = 0;
 
-    if( !_begin_transaction() )
+    if( !_begin_transaction( me ) )
     {
         _log(
             LOG_LEVEL_ERROR,
@@ -494,6 +450,7 @@ int event_queue_handler( void )
     }
 
     result = _execute_query(
+        me,
         ( char * ) get_event_queue_item,
         NULL,
         0
@@ -506,7 +463,7 @@ int event_queue_handler( void )
             "Failed to dequeue event item"
         );
 
-        _rollback_transaction();
+        _rollback_transaction( me );
         return 0;
     }
 
@@ -517,7 +474,7 @@ int event_queue_handler( void )
             "Event queue processor received spurious NOTIFY"
         );
 
-        _rollback_transaction();
+        _rollback_transaction( me );
         PQclear( result );
 
         return 0;
@@ -538,7 +495,7 @@ int event_queue_handler( void )
     new                    = get_column_value( 0, result, "new" );
     session_values         = get_column_value( 0, result, "session_values" );
 
-    set_session_gucs( session_values );
+    set_session_gucs( me, session_values );
     work_item_query_obj = _new_query( work_item_query );
 
     _add_parameter_to_query(
@@ -597,7 +554,7 @@ int event_queue_handler( void )
             LOG_LEVEL_ERROR,
             "regex replace operation on work_item_query failed"
         );
-        _rollback_transaction();
+        _rollback_transaction( me );
         PQclear( result );
         return 0;
     }
@@ -605,6 +562,7 @@ int event_queue_handler( void )
     _log( LOG_LEVEL_DEBUG, "WORK ITEM QUERY: " );
     _debug_struct( work_item_query_obj );
     work_item_result = _execute_query(
+        me,
         work_item_query_obj->query_string,
         work_item_query_obj->_bind_list,
         work_item_query_obj->_bind_count
@@ -620,7 +578,7 @@ int event_queue_handler( void )
         );
 
         PQclear( result );
-        _rollback_transaction();
+        _rollback_transaction( me );
         return 0;
     }
 
@@ -637,6 +595,7 @@ int event_queue_handler( void )
         params[0]  = parameters;
 
         insert_result = _execute_query(
+            me,
             ( char * ) new_work_item_query,
             params,
             7
@@ -650,7 +609,7 @@ int event_queue_handler( void )
             );
 
             PQclear( result );
-            _rollback_transaction();
+            _rollback_transaction( me );
             return 0;
         }
 
@@ -670,13 +629,14 @@ int event_queue_handler( void )
     params[8] = ctid;
 
     delete_result = _execute_query(
+        me,
         ( char * ) delete_event_queue_item,
         params,
         9
     );
 
     // Clear GUCs prior to freeing result handle
-    clear_session_gucs( session_values );
+    clear_session_gucs( me, session_values );
     PQclear( result );
     PQclear( work_item_result );
 
@@ -686,13 +646,13 @@ int event_queue_handler( void )
             LOG_LEVEL_ERROR,
             "Failed to dequeue event queue item"
         );
-        _rollback_transaction();
+        _rollback_transaction( me );
         return 0;
     }
 
     PQclear( delete_result );
 
-    if( _commit_transaction() == false )
+    if( _commit_transaction( me ) == false )
     {
         _log(
             LOG_LEVEL_ERROR,
@@ -724,7 +684,7 @@ int event_queue_handler( void )
  *              - Deletion of dequeued queue item
  *              - commit of transaction (if applicable)
  */
-int work_queue_handler( void )
+int work_queue_handler( struct worker * me )
 {
     PGresult * result        = NULL;
     PGresult * delete_result = NULL;
@@ -740,7 +700,7 @@ int work_queue_handler( void )
     );
 
     /* Start transaction */
-    if( !_begin_transaction() )
+    if( !_begin_transaction( me ) )
     {
         _log(
             LOG_LEVEL_ERROR,
@@ -750,6 +710,7 @@ int work_queue_handler( void )
     }
 
     result = _execute_query(
+        me,
         ( char * ) get_work_queue_item,
         NULL,
         0
@@ -762,7 +723,7 @@ int work_queue_handler( void )
             "Work queue dequeue operation failed"
         );
 
-        _rollback_transaction();
+        _rollback_transaction( me );
         return 0;
     }
 
@@ -771,7 +732,7 @@ int work_queue_handler( void )
 
     if( row_count == 0 )
     {
-        _rollback_transaction();
+        _rollback_transaction( me );
         PQclear( result );
         return 0;
     }
@@ -792,17 +753,18 @@ int work_queue_handler( void )
             "Executing action"
         );
 
-        action_result = execute_action( result, i );
+        action_result = execute_action( me, result, i );
 
         if( action_result == false )
         {
             PQclear( result );
-            _rollback_transaction();
+            _rollback_transaction( me );
             return 0;
         }
 
         /* Flush queue item */
         delete_result = _execute_query(
+            me,
             ( char * ) delete_work_queue_item,
             params,
             7
@@ -816,7 +778,7 @@ int work_queue_handler( void )
             );
 
             PQclear( result );
-            _rollback_transaction();
+            _rollback_transaction( me );
             return 0;
         }
 
@@ -825,15 +787,15 @@ int work_queue_handler( void )
 
     PQclear( result );
 
-    if( _commit_transaction() == false )
+    if( _commit_transaction( me ) == false )
     {
         _log(
             LOG_LEVEL_ERROR,
             "Failed to commit work queue transaction: %s",
-            PQerrorMessage( conn )
+            PQerrorMessage( me->conn )
         );
 
-        _rollback_transaction();
+        _rollback_transaction( me );
     }
 
     return 1;
@@ -985,7 +947,7 @@ static size_t _curl_write_callback(
  *     - Emits error when unsupported method passed as argument.
  *     - Can emit CuRL errors / warnings.
  */
-bool execute_remote_uri_call( struct action_result * action )
+bool execute_remote_uri_call( struct worker * me, struct action_result * action )
 {
     struct curl_response write_buffer = {0};
     CURLcode             response     = {0};
@@ -1025,7 +987,7 @@ bool execute_remote_uri_call( struct action_result * action )
     }
 
     param_list = _add_json_parameters_to_param_list(
-        curl_handle,
+        me->curl_handle,
         param_list,
         action->parameters,
         &malloc_size
@@ -1058,7 +1020,7 @@ bool execute_remote_uri_call( struct action_result * action )
         strcat( param_list, "&" );
 
         param_list = _add_json_parameters_to_param_list(
-            curl_handle,
+            me->curl_handle,
             param_list,
             action->static_parameters,
             &malloc_size
@@ -1092,7 +1054,7 @@ bool execute_remote_uri_call( struct action_result * action )
         strcat( param_list, "&" );
 
         param_list = _add_json_parameters_to_param_list(
-            curl_handle,
+            me->curl_handle,
             param_list,
             action->session_values,
             &malloc_size
@@ -1108,7 +1070,7 @@ bool execute_remote_uri_call( struct action_result * action )
         }
     }
 
-    if( !enable_curl )
+    if( !(me->enable_curl ) )
     {
         _log(
             LOG_LEVEL_ERROR,
@@ -1137,7 +1099,7 @@ bool execute_remote_uri_call( struct action_result * action )
     if( strcmp( action->method, "GET" ) == 0 )
     {
         _log( LOG_LEVEL_DEBUG, "Setting GET method" );
-        response = curl_easy_setopt( curl_handle, CURLOPT_HTTPGET, 1L );
+        response = curl_easy_setopt( me->curl_handle, CURLOPT_HTTPGET, 1L );
     }
     else if( strcmp( action->method, "PUT" ) == 0 )
     {
@@ -1150,12 +1112,12 @@ bool execute_remote_uri_call( struct action_result * action )
         // Right now, we're just hijacking GET logic to send our parameters, otherwise
         // the curl call for PUTs will deadlock and hang, as we are not actually uploading
         // a file. And the timeout doesn't seem to work either :)
-        response = curl_easy_setopt( curl_handle, CURLOPT_CUSTOMREQUEST, "PUT" );
+        response = curl_easy_setopt( me->curl_handle, CURLOPT_CUSTOMREQUEST, "PUT" );
     }
     else if( strcmp( action->method, "POST" ) == 0 )
     {
         _log( LOG_LEVEL_DEBUG, "Setting POST method" );
-        response = curl_easy_setopt( curl_handle, CURLOPT_POST, 1L );
+        response = curl_easy_setopt( me->curl_handle, CURLOPT_POST, 1L );
     }
     else
     {
@@ -1178,8 +1140,8 @@ bool execute_remote_uri_call( struct action_result * action )
         return false;
     }
 
-    response = curl_easy_setopt( curl_handle, CURLOPT_TIMEOUT, API_CALL_TIMEOUT );
-    
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_TIMEOUT, API_CALL_TIMEOUT );
+
     if( response != CURLE_OK )
     {
         _log(
@@ -1228,7 +1190,7 @@ bool execute_remote_uri_call( struct action_result * action )
         // Set post fields for PUT / POST
         remote_call = action->uri;
         curl_easy_setopt(
-            curl_handle,
+            me->curl_handle,
             CURLOPT_POSTFIELDS,
             param_list
         );
@@ -1237,27 +1199,27 @@ bool execute_remote_uri_call( struct action_result * action )
     if( action->use_ssl )
     {
         response = curl_easy_setopt(
-            curl_handle,
+            me->curl_handle,
             CURLOPT_USE_SSL,
             CURLUSESSL_TRY
         );
     }
 
     response = curl_easy_setopt(
-        curl_handle,
+        me->curl_handle,
         CURLOPT_URL,
         remote_call
     );
 
     _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
     response = curl_easy_setopt(
-        curl_handle,
+        me->curl_handle,
         CURLOPT_WRITEFUNCTION,
         _curl_write_callback
     );
 
     response = curl_easy_setopt(
-        curl_handle,
+        me->curl_handle,
         CURLOPT_WRITEDATA,
         ( void * ) &write_buffer
     );
@@ -1270,7 +1232,7 @@ bool execute_remote_uri_call( struct action_result * action )
             action->method,
             param_list
         );
-        response = curl_easy_perform( curl_handle );
+        response = curl_easy_perform( me->curl_handle );
         _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
     }
 
@@ -1340,7 +1302,7 @@ bool execute_remote_uri_call( struct action_result * action )
  *     - Emit error on failure to allocate string memory.
  *     - Emit error on transaction failure
  */
-bool execute_action_query( struct action_result * action )
+bool execute_action_query( struct worker * me, struct action_result * action )
 {
     PGresult * action_result;
     struct query * action_query;
@@ -1356,7 +1318,7 @@ bool execute_action_query( struct action_result * action )
         return false;
     }
 
-    set_session_gucs( action->session_values );
+    set_session_gucs( me, action->session_values );
     _add_parameter_to_query(
         action_query,
         "uid",
@@ -1398,7 +1360,7 @@ bool execute_action_query( struct action_result * action )
     _finalize_query( action_query );
 
     // Set UID
-    set_uid( action->uid, action->session_values );
+    set_uid( me, action->uid, action->session_values );
 
     if( action_query == NULL )
     {
@@ -1420,6 +1382,7 @@ bool execute_action_query( struct action_result * action )
     _debug_struct( action_query );
 
     action_result = _execute_query(
+        me,
         action_query->query_string,
         action_query->_bind_list,
         action_query->_bind_count
@@ -1437,7 +1400,7 @@ bool execute_action_query( struct action_result * action )
         return false;
     }
 
-    clear_session_gucs( action->session_values );
+    clear_session_gucs( me, action->session_values );
     PQclear( action_result );
     return true;
 }
@@ -1457,7 +1420,7 @@ bool execute_action_query( struct action_result * action )
  *     - Emits error on inability to allocate string memory.
  *     - Emits error from URI or query subroutines upon failure.
  */
-bool execute_action( PGresult * result, int row )
+bool execute_action( struct worker * me, PGresult * result, int row )
 {
     bool   execute_action_result = false;
     struct action_result action  = {0};
@@ -1519,11 +1482,11 @@ bool execute_action( PGresult * result, int row )
             "Executing action query"
         );
 
-        execute_action_result = execute_action_query( action_ptr );
+        execute_action_result = execute_action_query( me, action_ptr );
 
         if( execute_action_result == true && cyanaudit_installed == true )
         {
-            _cyanaudit_integration( action.transaction_label );
+            _cyanaudit_integration( me, action.transaction_label );
         }
     }
     else if( is_column_null( 0, result, "uri" ) == false )
@@ -1533,7 +1496,7 @@ bool execute_action( PGresult * result, int row )
             "Executing API call"
         );
 
-        execute_action_result = execute_remote_uri_call( action_ptr );
+        execute_action_result = execute_remote_uri_call( me, action_ptr );
     }
     else
     {
@@ -1561,7 +1524,7 @@ bool execute_action( PGresult * result, int row )
  *     Emits error on failure to make a call to
  *     cyanaudit.fn_label_last_transaction().
  */
-void _cyanaudit_integration( char * transaction_label )
+void _cyanaudit_integration( struct worker * me, char * transaction_label )
 {
     PGresult * cyanaudit_result = NULL;
     char *     param[1]         = {NULL};
@@ -1569,6 +1532,7 @@ void _cyanaudit_integration( char * transaction_label )
     param[0] = transaction_label;
 
     cyanaudit_result = _execute_query(
+        me,
         ( char * ) cyanaudit_label_tx,
         param,
         1
@@ -1588,139 +1552,6 @@ void _cyanaudit_integration( char * transaction_label )
 }
 
 /*
- * bool _rollback_transaction( void )
- *     rolls back a SQL transaction
- *
- * Arguments:
- *     None
- * Return:
- *     bool is_success: true indicates the transaction was successfully rolled back
- * Error Conditions:
- *     Emits error on failure to rollback transaction
- */
-bool _rollback_transaction( void )
-{
-    PGresult * result = NULL;
-
-    if( !tx_in_progress )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempted to issue ROLLBACK when no transaction was in progress"
-        );
-        return false;
-    }
-
-    result = PQexec(
-        conn,
-        "ROLLBACK"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to rollback transaction"
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    tx_in_progress = false;
-    return true;
-}
-
-/*
- * bool _commit_transaction( void )
- *     Commits a SQL transaction.
- *
- * Arguments:
- *    None
- * Return:
- *    bool is_success: true indicates that the transaction was successfully
- *                     committed.
- * Error Conditions:
- *    Emits error on failure to commit transaction.
- */
-bool _commit_transaction( void )
-{
-    PGresult * result = NULL;
-
-    if( !tx_in_progress )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempted to issue COMMIT when not transaction was in progress"
-        );
-        return false;
-    }
-
-    result = PQexec(
-        conn,
-        "COMMIT"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to commit transaction"
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    tx_in_progress = false;
-    return true;
-}
-
-/*
- * bool _begin_transaction( void )
- *     Begins a SQL transaction, sets the global tx state flag in the process.
- *
- * Arguments:
- *     None
- * Return:
- *     bool is_success: Indicates that the transaction was successfully begun.
- * Error Conditions:
- *     Emits error on failure to start transaction (one is already in progress.)
- */
-bool _begin_transaction( void )
-{
-    PGresult * result = NULL;
-
-    if( tx_in_progress )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempt to issue BEGIN when a transaction is already in progress"
-        );
-        return false;
-    }
-
-    result = PQexec(
-        conn,
-        "BEGIN"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to start transaction"
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    tx_in_progress = true;
-    return true;
-}
-
-/*
  * bool set_uid( char * uid, char * session_values )
  *     Makes a call to the function specified in event_manager.set_uid_function,
  *     binding in the uid to ?uid? and the originating transaction GUC values
@@ -1737,7 +1568,7 @@ bool _begin_transaction( void )
  *     - Emits error on failure to allocate string memory.
  *     - Emits error on failure to execute SQL function.
  */
-bool set_uid( char * uid, char * session_values )
+bool set_uid( struct worker * me, char * uid, char * session_values )
 {
     PGresult *     uid_function_result = NULL;
     struct query * set_uid_query_obj   = NULL;
@@ -1749,6 +1580,7 @@ bool set_uid( char * uid, char * session_values )
     params[0] = SET_UID_GUC_NAME;
 
     uid_function_result = _execute_query(
+        me,
         ( char * ) _uid_function,
         params,
         1
@@ -1828,6 +1660,7 @@ bool set_uid( char * uid, char * session_values )
     PQclear( uid_function_result );
     // Re-use handle
     uid_function_result = _execute_query(
+        me,
         set_uid_query_obj->query_string,
         set_uid_query_obj->_bind_list,
         set_uid_query_obj->_bind_count
@@ -1847,53 +1680,6 @@ bool set_uid( char * uid, char * session_values )
 
     PQclear( uid_function_result );
     return true;
-}
-
-// Signal Handlers
-
-/*
- * void __sigterm( int sig )
- *     SIGTERM signal handler
- *
- * Arguments:
- *     int sig: Signal number for SIGTERM
- * Return:
- *     None
- * Error Conditions:
- *     Emits error upon receiving SIGTERM
- */
-void __sigterm( int sig )
-{
-    _log(
-        LOG_LEVEL_ERROR,
-        "Got SIGTERM. Completing current transaction..."
-    );
-
-    free( conninfo );
-    if( enable_curl )
-    {
-        curl_easy_cleanup( curl_handle );
-        curl_global_cleanup();
-    }
-
-    if( tx_in_progress )
-    {
-        _rollback_transaction();
-    }
-
-    if( conn != NULL )
-    {
-        PQfinish( conn );
-    }
-
-    exit( 1 );
-}
-
-void __sighup( int sig )
-{
-    got_sighup = true;
-    signal ( sig, __sighup );
-    return;
 }
 
 /*
@@ -1921,44 +1707,32 @@ void __sighup( int sig )
  */
 int main( int argc, char ** argv )
 {
-    PGresult * result           = NULL;
-    PGresult * cyanaudit_result = NULL;
-    char *     params[1]        = {NULL};
+    PGresult *       result           = NULL;
+    PGresult *       cyanaudit_result = NULL;
+    char *           params[1]        = {NULL};
+    unsigned int     tid              = 0;
+    int              random_ind       = 4; // determined by dice roll
+    int              row_count        = 0;
 
-    int random_ind = 4; // determined by dice roll
-    int row_count  = 0;
+    _parse_args( argc, argv );
+
+    if( !parent_init() )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Could not allocate parent process memory"
+        );
+    }
 
     //Crapily seed PRNG for backoff of connection attempts on DB failure
     srand( random_ind * time(0) );
-    curl_handle = curl_easy_init();
-
-    if( curl_handle != NULL  )
-    {
-        enable_curl = true;
-        curl_easy_setopt( curl_handle, CURLOPT_NOSIGNAL, 1  );
-        curl_easy_setopt(
-            curl_handle,
-            CURLOPT_USERAGENT,
-            ( char * ) user_agent
-        );
-    }
-    else
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "CURL failed to initialize. Disabling"
-        );
-
-        enable_curl = false;
-    }
 
     // Setup Signal Handlers
     signal ( SIGHUP, __sighup );
     signal ( SIGTERM, __sigterm );
+    signal ( SIGINT, __sigint );
 
     params[0] = EXTENSION_NAME;
-
-    _parse_args( argc, argv );
 
     if( conninfo == NULL )
     {
@@ -1969,6 +1743,7 @@ int main( int argc, char ** argv )
     }
 
     result = _execute_query(
+        parent,
         ( char * ) extension_check_query,
         params,
         1
@@ -1979,7 +1754,7 @@ int main( int argc, char ** argv )
         _log(
             LOG_LEVEL_FATAL,
             "Extension check failed: %s",
-            PQerrorMessage( conn )
+            PQerrorMessage( parent->conn )
         );
     }
 
@@ -1998,6 +1773,7 @@ int main( int argc, char ** argv )
 
     /* Check for cyanaudit integration */
     cyanaudit_result = _execute_query(
+        parent,
         ( char * ) cyanaudit_check,
         NULL,
         0
@@ -2013,29 +1789,34 @@ int main( int argc, char ** argv )
 
     PQclear( cyanaudit_result );
 
+    if( parent->conn != NULL )
+    {
+        PQfinish( parent->conn );
+    }
+
     // Entry for other subs here
-    if( work_listener )
+    // Spawn
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Spawning %d workers (E: %d, W: %d)",
+        event_jobs + work_jobs,
+        event_jobs,
+        work_jobs
+    );
+
+    for( tid = 0; tid < event_jobs; tid++ )
     {
-        _queue_loop( WORK_QUEUE_CHANNEL, &work_queue_handler );
-    }
-    else if( event_listener )
-    {
-        _queue_loop( EVENT_QUEUE_CHANNEL, &event_queue_handler );
+        _log( LOG_LEVEL_DEBUG, "EL: %d", tid );
+        new_worker( WORKER_TYPE_EVENT_PROCESSOR, tid, &_queue_loop_wrapper );
     }
 
-    // We shouldn't get to this point, but just in case
-    if( conn != NULL )
+    for( tid = event_jobs; tid < ( work_jobs + event_jobs ); tid++ )
     {
-        PQfinish( conn );
+        _log( LOG_LEVEL_DEBUG, "WL: %d", tid );
+        new_worker( WORKER_TYPE_WORK_PROCESSOR, tid, &_queue_loop_wrapper );
     }
 
-    free( conninfo );
-
-    if( enable_curl )
-    {
-        curl_easy_cleanup( curl_handle );
-        curl_global_cleanup();
-    }
+    _manage_children( &_queue_loop_wrapper );
 
     return 0;
 }
@@ -2057,7 +1838,7 @@ int main( int argc, char ** argv )
  *     - Emits error on failure to set GUC via SQL commands.
  *
  */
-void set_session_gucs( char * session_gucs )
+void set_session_gucs( struct worker * me, char * session_gucs )
 {
     PGresult *   result           = NULL;
     jsmntok_t *  json_tokens      = NULL;
@@ -2197,6 +1978,7 @@ void set_session_gucs( char * session_gucs )
         params[0] = key;
         params[1] = value;
         result = _execute_query(
+            me,
             ( char * ) set_guc,
             params,
             2
@@ -2209,7 +1991,7 @@ void set_session_gucs( char * session_gucs )
                 "Failed to execute set_guc query"
             );
 
-            _rollback_transaction();
+            _rollback_transaction( me );
             free( key );
             if( value != NULL )
             {
@@ -2222,6 +2004,7 @@ void set_session_gucs( char * session_gucs )
         PQclear( result );
         _log( LOG_LEVEL_DEBUG, "Found session_guc kv pair: %s:%s", key, value );
         free( key );
+
         if( value != NULL )
         {
             free( value );
@@ -2255,7 +2038,7 @@ void set_session_gucs( char * session_gucs )
  *     - Emits error on failure to clear GUC via SQL commands.
  */
 
-void clear_session_gucs( char * session_gucs )
+void clear_session_gucs( struct worker * me, char * session_gucs )
 {
     PGresult *   result           = NULL;
     jsmntok_t *  json_tokens      = NULL;
@@ -2303,6 +2086,7 @@ void clear_session_gucs( char * session_gucs )
     }
 
     i = 1;
+
     for(;;)
     {
         json_key_token = json_tokens[i];
@@ -2354,6 +2138,7 @@ void clear_session_gucs( char * session_gucs )
         );
 
         result = _execute_query(
+            me,
             ( char * ) clear_guc,
             params,
             1
@@ -2367,7 +2152,7 @@ void clear_session_gucs( char * session_gucs )
             );
             free( json_tokens );
             free( key );
-            _rollback_transaction();
+            _rollback_transaction( me );
             return;
         }
 
@@ -2383,4 +2168,83 @@ void clear_session_gucs( char * session_gucs )
 
     free( json_tokens );
     return;
+}
+
+void _queue_loop_wrapper( void * data )
+{
+    struct worker * me        = NULL;
+    PGresult *      conn_test = NULL;
+
+    _log( LOG_LEVEL_DEBUG, "Pid %d got data %p", getpid(), data );
+
+    if( data == NULL )
+    {
+        _log( LOG_LEVEL_FATAL, "ERROR, Process %d started with empty pid table slice", getpid() );
+        exit( 1 );
+    }
+
+    me = ( struct worker * ) data;
+    // Finish setting up private scope
+    if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
+    {
+        me->dequeue_function = &event_queue_handler;
+        me->channel = EVENT_QUEUE_CHANNEL;
+    }
+    else if( me->type == WORKER_TYPE_WORK_PROCESSOR )
+    {
+        me->dequeue_function = &work_queue_handler;
+        me->channel = WORK_QUEUE_CHANNEL;
+        // Setup CURL
+        me->curl_handle = curl_easy_init();
+
+        if( me->curl_handle != NULL  )
+        {
+            me->enable_curl = true;
+            curl_easy_setopt( me->curl_handle, CURLOPT_NOSIGNAL, 1  );
+            curl_easy_setopt(
+                me->curl_handle,
+                CURLOPT_USERAGENT,
+                ( char * ) user_agent
+            );
+        }
+        else
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "CURL failed to initialize. Disabling"
+            );
+
+            me->enable_curl = false;
+        }
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "cannot run dequeue loop without a dequeue function"
+        );
+        return;
+    }
+
+    // Initialize DB connection
+    conn_test = _execute_query(
+        me,
+        "SELECT 1",
+        NULL,
+        0
+    );
+
+    if( conn_test == NULL || me->conn == NULL )
+    {
+        _log( LOG_LEVEL_FATAL, "Failed to initialize DB connection" );
+        return;
+    }
+
+    PQclear( conn_test );
+
+    // Start main loop
+    me->status = STATUS_WORKING;
+    _queue_loop( me );
+    __term();
+    exit( 0 );
 }

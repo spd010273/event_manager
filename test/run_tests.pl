@@ -266,12 +266,12 @@ sub check_event_manager_running(;$)
         my $startflags = [];
         unless( $work_processor_running )
         {
-            push( @$startflags, '-W' );
+            push( @$startflags, '-W 1' );
         }
 
         unless( $event_processor_running )
         {
-            push( @$startflags, '-E' );
+            push( @$startflags, '-E 1' );
         }
 
         foreach my $flag( @$startflags )

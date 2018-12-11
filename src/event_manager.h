@@ -13,7 +13,43 @@
 
 #ifndef EVENT_MANAGER_H
 #define EVENT_MANAGER_H
-#include <libpq-fe.h>
+//#include <libpq-fe.h>
+//#include <stdio.h>
+//#include <stdlib.h>
+//#include <unistd.h>
+//#include <stdbool.h>
+#include <math.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <time.h>
+
+#include "lib/util.h"
+#include "lib/strings.h"
+#include "lib/query_helper.h"
+#include "lib/jsmn/jsmn.h"
+
+/* Constants */
+#define MAX_CONN_RETRIES 3
+#define API_CALL_TIMEOUT 300L
+// Channels
+#define EVENT_QUEUE_CHANNEL "new_event_queue_item"
+#define WORK_QUEUE_CHANNEL "new_work_queue_item"
+
+// GUCs
+#define DEFAULT_WHEN_GUC_NAME "default_when_function"
+#define SET_UID_GUC_NAME "set_uid_function"
+#define GET_UID_GUC_NAME "get_uid_function"
+#define ASYNC_GUC_NAME "execute_asynchronously"
+
+// Regular Expression Settings
+#define MAX_REGEX_GROUPS 1
+#define MAX_REGEX_MATCHES 100
+
+// SQL States
+#define SQL_STATE_TERMINATED_BY_ADMINISTRATOR "57P01"
+#define SQL_STATE_CANCELED_BY_ADMINISTRATOR "57014"
 
 // Structures
 struct curl_response {
@@ -36,33 +72,29 @@ struct action_result {
 
 /* Function Prototypes */
 // Main functions
-void _queue_loop( const char *, int (*)(void) );
-int work_queue_handler( void );
-int event_queue_handler( void );
-bool execute_action( PGresult *, int );
-bool execute_action_query( struct action_result * );
-bool execute_remote_uri_call( struct action_result * );
-bool set_uid( char *, char * );
+void _queue_loop( struct worker * );
+void _queue_loop_wrapper( void * );
+int work_queue_handler( struct worker * );
+int event_queue_handler( struct worker * );
+bool execute_action( struct worker *, PGresult *, int );
+bool execute_action_query( struct worker *, struct action_result * );
+bool execute_remote_uri_call( struct worker *, struct action_result * );
+bool set_uid( struct worker *, char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
-PGresult * _execute_query( char *, char **, int );
+PGresult * _execute_query( struct worker *, char *, char **, int );
 char * get_column_value( int, PGresult *, char * );
 bool is_column_null( int, PGresult *, char * );
-bool _rollback_transaction( void );
-bool _commit_transaction( void );
-bool _begin_transaction( void );
-void set_session_gucs( char * );
-void clear_session_gucs( char * );
+bool _rollback_transaction( struct worker * );
+bool _commit_transaction( struct worker * );
+bool _begin_transaction( struct worker * );
+void set_session_gucs( struct worker *, char * );
+void clear_session_gucs( struct worker *, char * );
 
 // Integration functions
-void _cyanaudit_integration( char * );
-
-// Signal Handlers
-void __sigterm( int ) __attribute__ ((noreturn));
-void __sighup( int );
+void _cyanaudit_integration( struct worker *, char * );
 
 // Program Entry
 int main( int, char ** );
-
 #endif
