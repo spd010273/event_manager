@@ -21,16 +21,17 @@ char * ext_schema          = NULL;
 bool   cyanaudit_installed = false;
 
 /*
- * PGresult * _execute_query( char * query, char ** params, int param_count )
+ * PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
  *     Executes a given query. Has handlers present for:
  *         DB connection interruptions
  *         SQL command termination by administrator
  *         Error handling
  *
  * Arguments:
- *     - char * query:    SQL query string to execute.
- *     - char ** params:  Optional parameter list to be bound into the query.
- *     - int param_count: Length of above structure.
+ *     - struct worker * me: Structure containing DB handle
+ *     - char * query:       SQL query string to execute.
+ *     - char ** params:     Optional parameter list to be bound into the query
+ *     - int param_count:    Length of above structure.
  * Return:
  *     PGresult * result: Result handle of the executed query.
  * Error Conditions:
@@ -40,8 +41,6 @@ bool   cyanaudit_installed = false;
  *     - Emits error on syntax or improper termination of query.
  */
 
-// Added conn as first parameter, to be called with each thread's conn like &(conns[i]) or &parent_conn, as it may
-// redefine if the conn is interrupted
 PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
 {
     PGresult * result            = NULL;
@@ -208,15 +207,12 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
 }
 
 /*
- * void _queue_loop( const char * channel, int (*dequeue_function)(void) )
+ * void _queue_loop( struct worker * me )
  *     Listens to the specified channel for asynchronous notifications, calling
  *     the dequeue_function when a new queue item is present.
  *
  * Arguments:
- *     - const char * channel:          Channel on which the LISTEN command
- *                                      should be issued.
- *     - int (*dequeue_function)(void): pointer to the subroutine that handles a
- *                                      NOTIFY issued on this channel.
+ *     - struct worker * me: Struct containing DB handle
  * Return:
  *     None
  * Error conditions:
@@ -225,7 +221,6 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
  *     - Emits error when a SIGTERM is received.
  */
 void _queue_loop( struct worker * me )
-//const char * channel, int (*dequeue_function)(void) )
 {
     PGnotify * notify          = NULL;
     char *     listen_command  = NULL;
@@ -389,11 +384,11 @@ void _queue_loop( struct worker * me )
  */
 
 /*
- * int event_queue_handle( void )
+ * int event_queue_handle( struct worker * me )
  *     Handles new entries in event_manager.tb_event_queue.
  *
  * Arguments:
- *     None
+ *     struct worker * me:  Struct containing DB handle
  * Return:
  *     int rows_processed: 1 when a queue entry is successfully processed,
  *                         0 otherwise.
@@ -498,53 +493,15 @@ int event_queue_handler( struct worker * me )
     set_session_gucs( me, session_values );
     work_item_query_obj = _new_query( work_item_query );
 
-    _add_parameter_to_query(
-        work_item_query_obj,
-        "event_table_work_item",
-        event_table_work_item
-    );
+    _add_parameter_to_query( work_item_query_obj, "event_table_work_item", event_table_work_item );
+    _add_parameter_to_query( work_item_query_obj, "uid",                   uid                   );
+    _add_parameter_to_query( work_item_query_obj, "op",                    op                    );
+    _add_parameter_to_query( work_item_query_obj, "pk_value",              pk_value              );
+    _add_parameter_to_query( work_item_query_obj, "recorded",              recorded              );
 
-    _add_parameter_to_query(
-        work_item_query_obj,
-        "uid",
-        uid
-    );
-
-    _add_parameter_to_query(
-        work_item_query_obj,
-        "op",
-        op
-    );
-
-    _add_parameter_to_query(
-        work_item_query_obj,
-        "pk_value",
-        pk_value
-    );
-
-    _add_parameter_to_query(
-        work_item_query_obj,
-        "recorded",
-        recorded
-    );
-
-    _add_json_parameter_to_query(
-        work_item_query_obj,
-        old,
-        "OLD."
-    );
-
-    _add_json_parameter_to_query(
-        work_item_query_obj,
-        new,
-        "NEW."
-    );
-
-    _add_json_parameter_to_query(
-        work_item_query_obj,
-        session_values,
-        ( char * ) NULL
-    );
+    _add_json_parameter_to_query( work_item_query_obj, old,           "OLD."           );
+    _add_json_parameter_to_query( work_item_query_obj, new,           "NEW."           );
+    _add_json_parameter_to_query( work_item_query_obj, session_values, ( char * ) NULL );
 
     _finalize_query( work_item_query_obj );
 
@@ -666,11 +623,11 @@ int event_queue_handler( struct worker * me )
 }
 
 /*
- * int work_queue_handler( void )
+ * int work_queue_handler( struct worker * me )
  *     Handles new entries in event_manager.tb_event_queue
  *
  * Arguments:
- *     None
+ *     struct worker * me:  Struct containing DB handle
  * Return:
  *     int rows_processed: number of queue entries processed, 0 otherwise.
  * Error Conditions:
@@ -933,10 +890,11 @@ static size_t _curl_write_callback(
 }
 
 /*
- * bool execute_remote_uri_call( struct action_result * )
+ * bool execute_remote_uri_call( struct worker * me, struct action_result * )
  *     Uses CuRL to execute a remote POST, PUT, or GET request over HTTP/HTTPS
  *
  * Arguments:
+ *     struct worker * me:            Struct containing DB handle
  *     struct action_result * action: All available information on the action to
  *                                    be executed.
  * Return:
@@ -1154,7 +1112,15 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
 
     // Initialize buffer
     write_buffer.pointer = malloc( 1 );
-    write_buffer.size = 0;
+
+    if( write_buffer.pointer == NULL )
+    {
+        //Really? You dont have 1 byte?
+        _log( LOG_LEVEL_ERROR, "Failed to allocate memory for write buffer" );
+        return false;
+    }
+
+    write_buffer.size    = 0;
 
     if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
     {
@@ -1205,24 +1171,9 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
         );
     }
 
-    response = curl_easy_setopt(
-        me->curl_handle,
-        CURLOPT_URL,
-        remote_call
-    );
-
-    _log( LOG_LEVEL_DEBUG, "Setting writer callback" );
-    response = curl_easy_setopt(
-        me->curl_handle,
-        CURLOPT_WRITEFUNCTION,
-        _curl_write_callback
-    );
-
-    response = curl_easy_setopt(
-        me->curl_handle,
-        CURLOPT_WRITEDATA,
-        ( void * ) &write_buffer
-    );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_URL,           remote_call              );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEFUNCTION, _curl_write_callback     );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEDATA,     ( void * ) &write_buffer );
 
     if( response == CURLE_OK )
     {
@@ -1289,10 +1240,11 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
 }
 
 /*
- * bool execute_action_query( struct action_result * )
+ * bool execute_action_query( struct worker * me, struct action_result * )
  *     executes an action query
  *
  * Arguments:
+ *     struct worker * me:     Struct containing DB handle
  *     struct action_result *: All available information related to the action to
  *                             be executed.
  * Return:
@@ -1319,43 +1271,15 @@ bool execute_action_query( struct worker * me, struct action_result * action )
     }
 
     set_session_gucs( me, action->session_values );
-    _add_parameter_to_query(
-        action_query,
-        "uid",
-        action->uid
-    );
-
-    _add_parameter_to_query(
-        action_query,
-        "recorded",
-        action->recorded
-    );
-
-    _add_parameter_to_query(
-        action_query,
-        "transaction_label",
-        action->transaction_label
-    );
+    _add_parameter_to_query( action_query, "uid",                action->uid               );
+    _add_parameter_to_query( action_query, "recorded",           action->recorded          );
+    _add_parameter_to_query( action_query,  "transaction_label", action->transaction_label );
 
     _log( LOG_LEVEL_DEBUG, "PARAMS: %s", action->parameters );
 
-    _add_json_parameter_to_query(
-        action_query,
-        action->parameters,
-        ( char * ) NULL
-    );
-
-    _add_json_parameter_to_query(
-        action_query,
-        action->static_parameters,
-        ( char * ) NULL
-    );
-
-    _add_json_parameter_to_query(
-        action_query,
-        action->session_values,
-        ( char * ) NULL
-    );
+    _add_json_parameter_to_query( action_query, action->parameters,        ( char * ) NULL );
+    _add_json_parameter_to_query( action_query, action->static_parameters, ( char * ) NULL );
+    _add_json_parameter_to_query( action_query, action->session_values,    ( char * ) NULL );
 
     _finalize_query( action_query );
 
@@ -1406,33 +1330,34 @@ bool execute_action_query( struct worker * me, struct action_result * action )
 }
 
 /*
- * bool execute_action( PGresult * result, int row )
+ * bool execute_action( struct worker * me, PGresult * result, int row )
  *     Wrapper for processing work_queue items and dispatching them to either
  *     the URI or query execution subroutines.
  *
  * Arguments:
- *     - PGresult * result: Dequeued work queue entry.
- *     - int row:           Row index of the work queue entry.
+ *     - struct worker * me: Struct containing DB handle
+ *     - PGresult * result:  Dequeued work queue entry.
+ *     - int row:            Row index of the work queue entry.
  * Return:
- *     bool is_success:     true indicates successful completion of the action,
- *                          false otherwise.
+ *     bool is_success:      true indicates successful completion of the action,
+ *                           false otherwise.
  * Error Conditions
  *     - Emits error on inability to allocate string memory.
  *     - Emits error from URI or query subroutines upon failure.
  */
 bool execute_action( struct worker * me, PGresult * result, int row )
 {
-    bool   execute_action_result = false;
-    struct action_result action  = {0};
-    struct action_result * action_ptr = NULL;
-    char * use_ssl = NULL;
-    char * uri     = NULL; // Copy string
+    bool                   execute_action_result = false;
+    struct action_result   action                = {0};
+    struct action_result * action_ptr            = NULL;
+    char *                 use_ssl               = NULL;
+    char *                 uri                   = NULL; // Copy string
 
-    action_ptr               = &action;
-    action.parameters        = get_column_value( row, result, "parameters" );
-    action.uid               = get_column_value( row, result, "uid" );
-    action.recorded          = get_column_value( row, result, "recorded" );
-    action.session_values    = get_column_value( row, result, "session_values" );
+    action_ptr            = &action;
+    action.parameters     = get_column_value( row, result, "parameters"     );
+    action.uid            = get_column_value( row, result, "uid"            );
+    action.recorded       = get_column_value( row, result, "recorded"       );
+    action.session_values = get_column_value( row, result, "session_values" );
 
     uri = get_column_value( row, result, "uri" );
 
@@ -1459,14 +1384,10 @@ bool execute_action( struct worker * me, PGresult * result, int row )
         );
     }
 
-    action.transaction_label = get_column_value(
-        row,
-        result,
-        "transaction_label"
-    );
+    action.transaction_label = get_column_value( row, result, "transaction_label" );
 
-    action.method = get_column_value( row, result, "method" );
-    action.query  = get_column_value( row, result, "query" );
+    action.method = get_column_value( row, result, "method"  );
+    action.query  = get_column_value( row, result, "query"   );
     use_ssl       = get_column_value( row, result, "use_ssl" );
 
     if( strcmp( use_ssl, "t" ) == 0 || strcmp( use_ssl, "T" ) == 0 )
@@ -1513,10 +1434,11 @@ bool execute_action( struct worker * me, PGresult * result, int row )
 }
 
 /*
- * void _cyanaudit_integration( char * transaction_label )
+ * void _cyanaudit_integration( struct worker * me, char * transaction_label )
  *     Labels the completed transaction in CyanAudit, if present.
  *
  * Arguments:
+ *     struct worker * me:  Struct containing DB handle
  *     char * transaction_label: Label with which to identify transaction.
  * Return:
  *     None
@@ -1552,12 +1474,13 @@ void _cyanaudit_integration( struct worker * me, char * transaction_label )
 }
 
 /*
- * bool set_uid( char * uid, char * session_values )
+ * bool set_uid( struct worker * me, char * uid, char * session_values )
  *     Makes a call to the function specified in event_manager.set_uid_function,
  *     binding in the uid to ?uid? and the originating transaction GUC values
  *     specified in event_manager.session_gucs to their respective names.
  *
  * Arguments:
+ *     - struct worker * me:    Struct containing DB handle
  *     - char * uid:            String representation of the integer user ID
  *     - char * session_values: JSONB object containing the key-value pairs of
  *                              GUCs and their values.
@@ -1822,11 +1745,12 @@ int main( int argc, char ** argv )
 }
 
 /*
- * void set_session_gucs( char * session_gucs )
+ * void set_session_gucs( struct worker * me, char * session_gucs )
  *     Set the current session's GUCs based on stored values in the
  *     session_gucs JSON
  *
  * Arguments:
+ *     struct worker * me:  Struct containing DB handle
  *     char * session_gucs: JSON structure of key (GUC name) and value
  *                          (GUC value) pairs used to set the GUC in a
  *                          new session.
@@ -2023,11 +1947,12 @@ void set_session_gucs( struct worker * me, char * session_gucs )
 }
 
 /*
- * void clear_session_gucs( char * session_gucs )
+ * void clear_session_gucs( struct worker * me, char * session_gucs )
  *     Clears the GUC names present in the session_guc JSON, returning the
  *     session to a base state.
  *
  * Arguments:
+ *     struct worker * me:  Struct containing DB handle
  *     char * session_gucs: JSON object containing key (GUC names) and value
  *                          (GUC value) pairs used to clear the GUCs.
  * Return:
@@ -2170,6 +2095,20 @@ void clear_session_gucs( struct worker * me, char * session_gucs )
     return;
 }
 
+/*
+ * void _queue_loop_wrapper( void * data )
+ *     Wraps the queue loop function. Handles child process entry by
+ *     initializing handles, DB connection, and process state
+ *
+ * Arguments:
+ *     void * data: a struct worker * ( from the workers[] array) cast to void *
+ * Return:
+ *     None.
+ * Error Conditions:
+ *     - Emits error on failure to initialize DB connection
+ *     - Emits error on failure to initialize CURL handle
+ *     - Emits error on invalid argument
+ */
 void _queue_loop_wrapper( void * data )
 {
     struct worker * me        = NULL;
@@ -2184,18 +2123,29 @@ void _queue_loop_wrapper( void * data )
     }
 
     me = ( struct worker * ) data;
+
+    if( me->pid != getpid() )
+    {
+        // Wat
+        _log(
+            LOG_LEVEL_FATAL,
+            "PID mismatch: %d received workers[] entry belonging to %d.",
+            getpid(),
+            me->pid
+        );
+    }
+
     // Finish setting up private scope
     if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
     {
         me->dequeue_function = &event_queue_handler;
-        me->channel = EVENT_QUEUE_CHANNEL;
+        me->channel          = EVENT_QUEUE_CHANNEL;
     }
     else if( me->type == WORKER_TYPE_WORK_PROCESSOR )
     {
         me->dequeue_function = &work_queue_handler;
-        me->channel = WORK_QUEUE_CHANNEL;
-        // Setup CURL
-        me->curl_handle = curl_easy_init();
+        me->channel          = WORK_QUEUE_CHANNEL;
+        me->curl_handle      = curl_easy_init();
 
         if( me->curl_handle != NULL  )
         {
@@ -2221,8 +2171,11 @@ void _queue_loop_wrapper( void * data )
     {
         _log(
             LOG_LEVEL_ERROR,
-            "cannot run dequeue loop without a dequeue function"
+            "cannot run dequeue loop without a dequeue function:"\
+            "invalid process type: %d",
+            me->type
         );
+
         return;
     }
 
@@ -2236,7 +2189,11 @@ void _queue_loop_wrapper( void * data )
 
     if( conn_test == NULL || me->conn == NULL )
     {
-        _log( LOG_LEVEL_FATAL, "Failed to initialize DB connection" );
+        _log(
+            LOG_LEVEL_FATAL,
+            "Failed to initialize DB connection"
+        );
+
         return;
     }
 
@@ -2245,6 +2202,8 @@ void _queue_loop_wrapper( void * data )
     // Start main loop
     me->status = STATUS_WORKING;
     _queue_loop( me );
-    __term();
+
+    // We should not get here but ehh
+    free_worker( me );
     exit( 0 );
 }

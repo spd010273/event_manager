@@ -302,7 +302,15 @@ void _log( char * log_level, char * message, ... )
 }
 
 /*
+ * void free_worker( struct worker * worker )
+ *     Deallocates memory used by a process for handles and objects
  *
+ * Arguments:
+ *     struct worker * worker: workers[] array slice for the child process
+ * Return:
+ *     None
+ * Error Conditions:
+ *     None
  */
 void free_worker( struct worker * worker )
 {
@@ -336,14 +344,14 @@ void free_worker( struct worker * worker )
 /*
  *  bool parent_init( void )
  *      Initial special (initial) call to new_worker for parent process
- *   
+ *
  *   Arguments:
  *      None
  *   Return:
  *      true on success, false on error
  *   Error Conditions:
  *      Same failure scenarios as new_worker()
- */ 
+ */
 bool parent_init( void )
 {
     parent = new_worker( WORKER_TYPE_PARENT, 0, NULL );
@@ -638,33 +646,65 @@ void __sigterm( int sig )
 {
     // TODO, verify that all processes receive this, and that the children cleanup, and the parent reaps
     _log(
-        LOG_LEVEL_ERROR,
+        LOG_LEVEL_DEBUG,
         "Got SIGTERM. Completing current transaction..."
     );
 
     __term();
 }
 
+/*
+ * void __sighub( int sig )
+ *     SIGHUP handler
+ *
+ * Arguments:
+ *     int sig: Signal number for SIGHUP
+ * Return:
+ *     None
+ * Error Conditions:
+ *     None
+ */
 void __sighup( int sig )
 {
     // TODO: reload config?
     got_sighup = true;
     signal ( sig, __sighup );
+    got_sighup = false;
     return;
 }
 
+/*
+ * void __sigint( int sig )
+ *     SIGINT handler
+ *
+ * Arguments:
+ *     int sig: Signal number for SIGINT
+ * Return:
+ *     None
+ * Error Conditions:
+ *     Emits error upon receiving SIGTERM
+ */
 void __sigint( int sig )
 {
     got_sigint = true;
 
     _log(
-        LOG_LEVEL_ERROR,
+        LOG_LEVEL_DEBUG,
         "Got SIGINT, Completing current transaction..."
     );
 
     __term();
 }
 
+/*
+ * void __term( void )
+ *     Termination handler for __sigint or fatal errors
+ * Arguments:
+ *     None
+ * Return:
+ *     None
+ * Error Conditions:
+ */
 void __term( void )
 {
     struct worker * me = NULL;
@@ -737,6 +777,18 @@ void __term( void )
     exit(1);
 }
 
+/*
+ * struct worker * get_worker_by_pid()
+ *    Call getpid() and search the process table for the worker struct
+ *
+ * Arguments:
+ *     None
+ * Return:
+ *     struct worker * on successful location
+ *     NULL on error
+ * Error condition:
+ *     Returns NULL and emits warning on failure to locate worker entry
+ */
 struct worker * get_worker_by_pid()
 {
     struct worker * me  = NULL;
@@ -754,10 +806,10 @@ struct worker * get_worker_by_pid()
     }
     else
     {
-        _log( LOG_LEVEL_ERROR, "parent process entry is NULL" );
+        _log( LOG_LEVEL_DEBUG, "parent process entry is NULL" );
     }
 
-    // Search worker table
+    // Search workers array
     if( me == NULL && workers != NULL )
     {
         for( i = 0; i < ( event_jobs + work_jobs ); i++ )
@@ -780,6 +832,19 @@ struct worker * get_worker_by_pid()
 
     return me;
 }
+
+/*
+ * void * create_shared_memory( size_t size )
+ *     Allocates a memory pointer of size_t using mmap
+ *
+ * Arguments:
+ *     size_t size: Number of bytes to allocate
+ * Return:
+ *     void * ptr: Pointer to allocated memory region
+ *     NULL on error
+ * Error Conditions:
+ *     Emits error and returns NULL on allocation failure
+ */
 
 void * create_shared_memory( size_t size )
 {
@@ -810,6 +875,21 @@ void * create_shared_memory( size_t size )
     return ptr;
 }
 
+/*
+ * void _manage_children( void (*function)( void * )
+ *     Loop for parent process to run, monitors child processes for
+ *     unexpected termination, and if so inclined, attempts to restart them.
+ *
+ * Arguments:
+ *     void (*function)(void * ) Function pointer to child process routine
+ *
+ * Return:
+ *     None
+ *
+ * Error Conditions:
+ *     - Emits error when a child is found dead
+ *     - Emits error when a child cannot be restarted
+ */
 void _manage_children( void (*function)( void * ) )
 {
     struct worker * worker   = NULL;
@@ -892,7 +972,7 @@ void _manage_children( void (*function)( void * ) )
                         {
                             kill( pid, SIGTERM );
                             waitpid( pid, NULL, WNOHANG );
-                            
+
                             if( munmap( worker, sizeof( struct worker ) ) != 0 )
                             {
                                 _log(
@@ -925,7 +1005,7 @@ void _manage_children( void (*function)( void * ) )
             "Failed to free PID table"
         );
     }
-    
+
     if( parent != NULL )
     {
         free( parent );

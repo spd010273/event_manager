@@ -119,8 +119,7 @@ Some notes about the various modes:
 
 * Remote API calls cannot be made in synchronous mode
 * event_table_work_item.execute_asynchronously overrides the global setting (the global setting defines the default for this value)
-* Asynchronous mode requires the event_manager process to be started:
-  * Start two copies of the process, one with the -W flag (for work queue processing) and another with the -E flag (for event queue processing)
+* Asynchronous mode requires the event_manager process to be started, at a minimum, with -W 1 and -E 1 as arguments
 
 ## The Queues
 
