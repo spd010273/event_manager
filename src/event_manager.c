@@ -124,6 +124,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
             );
 
             PQfinish( me->conn );
+            me->conn = NULL;
         }
 
         sleep( last_backoff_time );
@@ -1639,7 +1640,7 @@ int main( int argc, char ** argv )
 
     _parse_args( argc, argv );
 
-    if( !parent_init() )
+    if( !parent_init( argc, argv ) )
     {
         _log(
             LOG_LEVEL_FATAL,
@@ -1649,11 +1650,6 @@ int main( int argc, char ** argv )
 
     //Crapily seed PRNG for backoff of connection attempts on DB failure
     srand( random_ind * time(0) );
-
-    // Setup Signal Handlers
-    signal ( SIGHUP, __sighup );
-    signal ( SIGTERM, __sigterm );
-    signal ( SIGINT, __sigint );
 
     params[0] = EXTENSION_NAME;
 
@@ -1715,6 +1711,7 @@ int main( int argc, char ** argv )
     if( parent->conn != NULL )
     {
         PQfinish( parent->conn );
+        parent->conn = NULL;
     }
 
     // Entry for other subs here
@@ -1730,16 +1727,16 @@ int main( int argc, char ** argv )
     for( tid = 0; tid < event_jobs; tid++ )
     {
         _log( LOG_LEVEL_DEBUG, "EL: %d", tid );
-        new_worker( WORKER_TYPE_EVENT_PROCESSOR, tid, &_queue_loop_wrapper );
+        new_worker( WORKER_TYPE_EVENT_PROCESSOR, tid, &_queue_loop_wrapper, argc, argv );
     }
 
     for( tid = event_jobs; tid < ( work_jobs + event_jobs ); tid++ )
     {
         _log( LOG_LEVEL_DEBUG, "WL: %d", tid );
-        new_worker( WORKER_TYPE_WORK_PROCESSOR, tid, &_queue_loop_wrapper );
+        new_worker( WORKER_TYPE_WORK_PROCESSOR, tid, &_queue_loop_wrapper, argc, argv);
     }
 
-    _manage_children( &_queue_loop_wrapper );
+    _manage_children( &_queue_loop_wrapper, argc, argv );
 
     return 0;
 }

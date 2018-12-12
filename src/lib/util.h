@@ -1,7 +1,7 @@
 /*------------------------------------------------------------------------
  *
  * util.h
- *     Utility function prototypes
+ *     Utility function prototypes and process managment routines
  *
  * Copyright (c) 2018, Nead Werx, Inc.
  *
@@ -27,6 +27,8 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <limits.h>
+#include <sys/user.h>
 
 #define LOG_LEVEL_WARNING "WARNING"
 #define LOG_LEVEL_ERROR "ERROR"
@@ -45,6 +47,11 @@
 #define WORKER_TYPE_EVENT_PROCESSOR 1
 #define WORKER_TYPE_WORK_PROCESSOR 2
 #define WORKER_TYPE_PARENT 3
+
+#define WORKER_TITLE_EVENT_PROCESSOR "event queue processor"
+#define WORKER_TITLE_WORK_PROCESSOR "work queue processor"
+#define WORKER_TITLE_PARENT "Event Manager parent process"
+
 struct worker {
     int (*dequeue_function)( struct worker * );
     const char *   channel;
@@ -55,6 +62,8 @@ struct worker {
     bool           tx_in_progress;
     bool           enable_curl;
     unsigned short status;
+    int            my_argc;
+    char **        my_argv;
 };
 
 unsigned int  event_jobs;
@@ -70,10 +79,15 @@ struct worker * parent;
 void _parse_args( int, char ** );
 void _usage( char * ) __attribute__ ((noreturn));
 void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
+
+struct worker * new_worker( unsigned short, unsigned int, void (*function)( void * ), int, char ** );
 void free_worker( struct worker * worker );
-struct worker * new_worker( unsigned short, unsigned int, void (*function)( void * ) );
+
 struct worker * get_worker_by_pid( void );
-bool parent_init( void );
+bool parent_init( int, char ** );
+void * create_shared_memory( size_t );
+void _manage_children( void (*function)( void * ), int, char ** ) __attribute__ ((noreturn));
+void _set_process_title( char * );
 
 void __sigterm( int ) __attribute__ ((noreturn));
 void __sigint( int ) __attribute__ ((noreturn));
@@ -83,6 +97,5 @@ void __term( void ) __attribute__ ((noreturn));
 bool _rollback_transaction( struct worker * );
 bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
-void * create_shared_memory( size_t );
-void _manage_children( void (*function)( void * ) ) __attribute__ ((noreturn));
+
 #endif
