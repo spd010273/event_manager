@@ -1,5 +1,5 @@
 [Unit]
-Description=Event Manager Event Queue Processor
+Description=Event Manager
 Documentation=https://bitbucket.org/neadwerx/event_manager/src/master/
 After=network.target
 
