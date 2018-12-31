@@ -28,6 +28,7 @@ use Params::Validate qw( :all );
 use Getopt::Std;
 use File::Copy;
 use File::Path qw( make_path );
+use IO::Interactive qw( is_interactive );
 
 Readonly my $LOG_DIR             => '/var/log/event_manager/';
 Readonly my $LOG_FILE            => 'event_manager.log';
@@ -57,17 +58,6 @@ my $port;
 my $dbname;
 my $worker_count;
 my $event_count;
-
-sub __is_interactive()
-{
-    # Emulate &IO::Interactive::is_interactive()
-    if( -t *ARGV && -t *STDOUT )
-    {
-        return 1;
-    }
-
-    return 0;
-}
 
 sub get_user_input($)
 {
@@ -114,7 +104,7 @@ sub test_connection()
 
 sub get_username()
 {
-    if( __is_interactive() )
+    if( is_interactive() )
     {
         $username = get_user_input( 'Please enter a username:' );
     }
@@ -128,7 +118,7 @@ sub get_username()
 
 sub get_hostname()
 {
-    if( __is_interactive() )
+    if( is_interactive() )
     {
         $hostname = get_user_input( 'Please enter a hostname:' );
     }
@@ -142,7 +132,7 @@ sub get_hostname()
 
 sub get_port()
 {
-    if( __is_interactive() )
+    if( is_interactive() )
     {
         $port = get_user_input( 'Please enter a port:' );
     }
@@ -156,7 +146,7 @@ sub get_port()
 
 sub get_dbname()
 {
-    if( __is_interactive() )
+    if( is_interactive() )
     {
         $dbname = get_user_input( 'Please enter a database name:' );
     }
@@ -171,7 +161,7 @@ sub get_dbname()
 
 sub get_worker_count()
 {
-    if( __is_interactive() )
+    if( is_interactive() )
     {
         $worker_count = get_user_input( 'Please enter the number of work queue processes:' );
     }
@@ -197,7 +187,7 @@ sub get_worker_count()
 
 sub get_event_count()
 {
-    if( __is_interactive() )
+    if( is_interactive() )
     {
         $event_count = get_user_input( 'Please enter the number of event queue processes:' );
     }
