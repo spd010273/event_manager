@@ -27,33 +27,47 @@ use English qw( -no_match_vars );
 use Params::Validate qw( :all );
 use Getopt::Std;
 use File::Copy;
+use File::Path;
 
-Readonly my $start_sh => <<BASH;
+Readonly my $LOG_DIR             => '/var/log/event_manager/';
+Readonly my $LOG_FILE            => 'event_manager.log';
+Readonly my $START_FILE_NAME     => 'event_manager-startup.sh';
+Readonly my $STOP_FILE_NAME      => 'event_manager-shutdown.sh';
+Readonly my $SH_TARGET_DIR       => '/usr/bin/';
+Readonly my $SYSTEMD_SERVICE_DIR => '/usr/lib/systemd/system/';
+Readonly my $GIT_INIT_COMMAND    => 'git submodule update --init --recursive';
+
+Readonly my $START_SH => <<BASH;
 #!/bin/bash
 #    This script will start the Event Manager daemons
 
-__INSTALL_DIR__/event_manager -U __USERNAME__ -d __DBNAME__ -h __HOSTNAME__ -p __PORT__ -W &
-__INSTALL_DIR__/event_manager -U __USERNAME__ -d __DBNAME__ -h __HOSTNAME__ -p __PORT__ -E &
+__INSTALL_DIR__/event_manager -U __USERNAME__ -d __DBNAME__ -h __HOSTNAME__ -p __PORT__ -W __WORKER_COUNT__ -E __EVENT_COUNT__ &> ${LOG_DIR}${LOG_FILE} & 
 BASH
 
-Readonly my $stop_sh => <<BASH;
+Readonly my $STOP_SH => <<BASH;
 #!/bin/bash
 #    This script will stop the event_manager daemons
 
 killall event_manager
 BASH
 
-Readonly my $start_file_name => 'event_manager-startup.sh';
-Readonly my $stop_file_name => 'event_manager-shutdown.sh';
-Readonly my $sh_target_dir => '/usr/bin/';
-Readonly my $systemd_service_dir => '/usr/lib/systemd/system/';
-
-Readonly my $git_init_command => 'git submodule update --init --recursive';
-
 my $hostname;
 my $username;
 my $port;
 my $dbname;
+my $worker_count;
+my $event_count;
+
+sub __is_interactive()
+{
+    # Emulate &IO::Interactive::is_interactive()
+    if( -t *ARGV && -t *STDOUT )
+    {
+        return 1;
+    }
+
+    return 0;
+}
 
 sub get_user_input($)
 {
@@ -72,7 +86,7 @@ sub get_user_input($)
 sub build_repo()
 {
     # It's expected we're in the event_manager root
-    system( $git_init_command );
+    system( $GIT_INIT_COMMAND );
     #TODO:
     #  - Check for lib prerequisites
     system( 'make clean' );
@@ -100,25 +114,110 @@ sub test_connection()
 
 sub get_username()
 {
-    $username = get_user_input( 'Please enter a username:' );
+    if( __is_interactive() )
+    {
+        $username = get_user_input( 'Please enter a username:' );
+    }
+    else
+    {
+        $username = 'postgres';
+    }
+
     return;
 }
 
 sub get_hostname()
 {
-    $hostname = get_user_input( 'Please enter a hostname:' );
+    if( __is_interactive() )
+    {
+        $hostname = get_user_input( 'Please enter a hostname:' );
+    }
+    else
+    {
+        $hostname = 'localhost';
+    }
+
     return;
 }
 
 sub get_port()
 {
-    $port = get_user_input( 'Please enter a port:' );
+    if( __is_interactive() )
+    {
+        $port = get_user_input( 'Please enter a port:' );
+    }
+    else
+    {
+        $port = 5432;
+    }
+
     return;
 }
 
 sub get_dbname()
 {
-    $dbname = get_user_input( 'Please enter a database name:' );
+    if( __is_interactive() )
+    {
+        $dbname = get_user_input( 'Please enter a database name:' );
+    }
+    else
+    {
+        carp 'No database name provided :|';
+        $dbname = 'postgres';
+    }
+
+    return;
+}
+
+sub get_worker_count()
+{
+    if( __is_interactive() )
+    {
+        $worker_count = get_user_input( 'Please enter the number of work queue processes:' );
+    }
+    else
+    {
+        $worker_count = 1;
+    }
+    
+    if(
+            defined $worker_count
+        and length( $worker_count ) > 0
+        and $worker_count =~ m/^\d+$/
+        and $worker_count > 0
+        and $worker_count <= 16
+      )
+    {
+        return;
+    }
+
+    $worker_count = 1;
+    return;
+}
+
+sub get_event_count()
+{
+    if( __is_interactive() )
+    {
+        $event_count = get_user_input( 'Please enter the number of event queue processes:' );
+    }
+    else
+    {
+        $event_count = 1;
+    }
+    
+    if(
+            defined $event_count
+        and length( $event_count ) > 0
+        and $event_count =~ m/^\d+$/
+        and $event_count > 0
+        and $event_count <= 16
+      )
+    {
+        return;
+    }
+
+    $event_count = 1;
     return;
 }
 
@@ -128,11 +227,19 @@ if( $EFFECTIVE_USER_ID != 0 )
     croak( 'Must be root' );
 }
 
+unless( -e $LOG_DIR )
+{
+    unless( make_path( $LOG_DIR ) )
+    {
+        croak "Failed to create logging directory $LOG_DIR";
+    }
+}
+
 my $dir = getcwd();
 
 unless( -e "$dir/../event_manager" )
 {
-    croak "Could not locate event_manager daemon - is it built?";
+    croak 'Could not locate event_manager daemon - is it built?';
 }
 
 if( $dir =~ /\/service/ )
@@ -145,13 +252,15 @@ build_repo();
 my $install_dir = getcwd();
 chdir( $dir );
 
-our( $opt_d, $opt_U, $opt_p, $opt_h );
-unless( getopts( 'd:U:p:h:' ) )
+our( $opt_d, $opt_U, $opt_p, $opt_h, $opt_E, $opt_W );
+unless( getopts( 'd:U:p:h:E:W:' ) )
 {
     get_dbname();
     get_username();
     get_hostname();
     get_port();
+    get_worker_count();
+    get_event_count();
 }
 
 GET_ARGS:
@@ -191,61 +300,78 @@ else
     get_port();
 }
 
-unless( test_connection() )
+if( defined $opt_E and $opt_E =~ /^\d+$/ and ( $opt_E > 0 and $opt_E <= 16 ) )
 {
-    print "Connection parameters do not work\n";
-    goto GET_ARGS;
-}
-
-my $start_shell_script = $start_sh;
-$start_shell_script =~ s/__INSTALL_DIR__/$install_dir/g;
-$start_shell_script =~ s/__USERNAME__/$username/g;
-$start_shell_script =~ s/__DBNAME__/$dbname/g;
-$start_shell_script =~ s/__HOSTNAME__/$hostname/g;
-$start_shell_script =~ s/__PORT__/$port/g;
-
-unless( open( STARTFILE, ">${sh_target_dir}${start_file_name}" ) )
-{
-    croak "Failed to write to ${sh_target_dir} for systemd startup script";
-}
-
-print STARTFILE $start_shell_script;
-
-close STARTFILE;
-
-unless( open( STOPFILE, ">${sh_target_dir}${stop_file_name}" ) )
-{
-    croak "Failed to write to ${sh_target_dir} for systemd shutdown script";
-}
-
-print STOPFILE $stop_sh;
-
-close STOPFILE;
-
-chmod "0755", "${sh_target_dir}${start_file_name}";
-chmod "0755", "${sh_target_dir}${stop_file_name}";
-
-if( -e "${sh_target_dir}${start_file_name}" and -e "${sh_target_dir}${stop_file_name}" )
-{
-    print "Copied start/stop scripts to ${sh_target_dir}\n";
+    $event_count = $opt_E;
 }
 else
 {
-    croak "Failed to setup start/stop scripts in ${sh_target_dir}\n";
+    get_event_count();
 }
 
-unless( -e $systemd_service_dir )
+if( defined $opt_W and $opt_W =~ /^\d+$/ and ( $opt_W > 0 and $opt_W <= 16 ) )
+{
+    $worker_count = $opt_W;
+}
+else
+{
+    get_worker_count();
+}
+
+unless( test_connection() )
+{
+    carp 'Connection parameters do not work';
+    goto GET_ARGS;
+}
+
+my $start_shell_script = $START_SH;
+$start_shell_script    =~ s/__INSTALL_DIR__/$install_dir/g;
+$start_shell_script    =~ s/__USERNAME__/$username/g;
+$start_shell_script    =~ s/__DBNAME__/$dbname/g;
+$start_shell_script    =~ s/__HOSTNAME__/$hostname/g;
+$start_shell_script    =~ s/__PORT__/$port/g;
+$start_shell_script    =~ s/__WORKER_COUNT__/$worker_count/g;
+$start_shell_script    =~ s/__EVENT_COUNT__/$event_count/g;
+
+unless( open( STARTFILE, ">${SH_TARGET_DIR}${START_FILE_NAME}" ) )
+{
+    croak "Failed to write to ${SH_TARGET_DIR} for systemd startup script";
+}
+
+print STARTFILE $start_shell_script;
+close STARTFILE;
+chmod "0755", "${SH_TARGET_DIR}${START_FILE_NAME}";
+
+unless( open( STOPFILE, ">${SH_TARGET_DIR}${STOP_FILE_NAME}" ) )
+{
+    croak "Failed to write to ${SH_TARGET_DIR} for systemd shutdown script";
+}
+
+print STOPFILE $STOP_SH;
+close STOPFILE;
+chmod "0755", "${SH_TARGET_DIR}${STOP_FILE_NAME}";
+
+if( -e "${SH_TARGET_DIR}${START_FILE_NAME}" and -e "${SH_TARGET_DIR}${STOP_FILE_NAME}" )
+{
+    print "Copied start/stop scripts to ${SH_TARGET_DIR}\n";
+}
+else
+{
+    croak "Failed to setup start/stop scripts in ${SH_TARGET_DIR}\n";
+}
+
+unless( -e $SYSTEMD_SERVICE_DIR )
 {
     croak 'Is systemd installed??';
 }
 
-unless( copy( "${install_dir}/service/event_manager.service", $systemd_service_dir ) )
+unless( copy( "${install_dir}/service/event_manager.service", $SYSTEMD_SERVICE_DIR ) )
 {
     print "source dir is ${install_dir}/service/event_manager.service\n";
-    croak "Failed to copy file to $systemd_service_dir: $OS_ERROR";
+    croak "Failed to copy file to $SYSTEMD_SERVICE_DIR: $OS_ERROR";
 }
 
-my $result = system( "systemd-analyze verify ${systemd_service_dir}/event_manager.service" );
+my $result = system( "systemd-analyze verify ${SYSTEMD_SERVICE_DIR}/event_manager.service" );
 
 if( $result )
 {
