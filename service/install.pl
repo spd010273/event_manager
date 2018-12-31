@@ -27,7 +27,7 @@ use English qw( -no_match_vars );
 use Params::Validate qw( :all );
 use Getopt::Std;
 use File::Copy;
-use File::Path;
+use File::Path qw( make_path );
 
 Readonly my $LOG_DIR             => '/var/log/event_manager/';
 Readonly my $LOG_FILE            => 'event_manager.log';
