@@ -940,6 +940,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
 
     while( alive )
     {
+        sleep( 10 );
         alive = false;
         for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
         {
