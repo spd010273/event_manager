@@ -79,8 +79,11 @@ sub build_repo()
     system( $GIT_INIT_COMMAND );
     #TODO:
     #  - Check for lib prerequisites
+
     system( 'make clean' );
     system( 'make' ); 
+    system( 'make install' );
+
     return;
 }
 
@@ -92,6 +95,11 @@ sub test_connection()
         $username,
         undef
     );
+
+    unless( defined $handle )
+    {
+        return 0;
+    }
 
     if( $handle->ping() > 0 )
     {
