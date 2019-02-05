@@ -1,7 +1,7 @@
 /*------------------------------------------------------------------------
  *
  * util.c
- *     Utility functions
+ *     Utility and process management functions
  *
  * Copyright (c) 2018, Nead Werx, Inc.
  *
@@ -15,9 +15,10 @@
 
 #define VERSION 0.1
 
-struct worker ** workers = NULL;
-struct worker * parent   = NULL;
-char          * conninfo = NULL;
+struct worker ** workers     = NULL;
+struct worker *  parent      = NULL;
+char *           conninfo    = NULL;
+bool             single_step_only = false;
 
 extern char ** envorion; // Declared in unistd.h
 
@@ -38,6 +39,7 @@ Usage: event_manager\n \
     -E worker_count: Number of Event Queue workers to spawn\n \
     -W worker_count: Number of Work Queue workers to spawn\n \
   [ -D debug mode\n \
+    -S single step\n \
     -v VERSION\n \
     -? HELP ]\n";
 
@@ -67,7 +69,7 @@ void _parse_args( int argc, char ** argv )
 
     opterr = 0;
 
-    while( ( c = getopt( argc, argv, "U:p:d:h:E:W:v?" ) ) != -1 )
+    while( ( c = getopt( argc, argv, "U:p:d:h:E:W:Sv?" ) ) != -1 )
     {
         switch( c )
         {
@@ -93,6 +95,9 @@ void _parse_args( int argc, char ** argv )
                 break;
             case 'W':
                 work_job_count = optarg;
+                break;
+            case 'S':
+                single_step_only = true;
                 break;
             default:
                 _usage( "Invalid argument." );
@@ -142,6 +147,25 @@ void _parse_args( int argc, char ** argv )
     if( work_jobs == 0 && event_jobs == 0 )
     {
         _usage( "Must specify at least one event or one work processor" );
+    }
+
+    if( ( work_jobs > 1 || event_jobs > 1 ) && single_step_only )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Forcing process counts to 1, it's suggested to run a single copy of"\
+            "each queue processor while in single step mode"
+        );
+
+        if( work_jobs > 1 )
+        {
+            work_jobs = 1;
+        }
+
+        if( event_jobs > 1 )
+        {
+            event_jobs = 1;
+        }
     }
 
     if( port == NULL )
@@ -340,6 +364,7 @@ void free_worker( struct worker * worker )
     }
 
     munmap( worker, sizeof( struct worker ) );
+    worker = NULL;
     return;
 }
 
@@ -490,7 +515,7 @@ struct worker * new_worker(
         void * data;
 
         data = ( void * ) get_worker_by_pid();
-        
+
         if( data != NULL )
         {
             ( ( struct worker * ) data )->my_argc = argc;
@@ -942,20 +967,20 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
     {
         sleep( 10 );
         alive = false;
+
         for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
         {
-            worker = workers[tid];
-
-            if( worker == NULL )
+            if( workers[tid] == NULL )
             {
                 _log(
                     LOG_LEVEL_DEBUG,
-                    "Skipping dead worker slot at index %u",
+                    "Skipping dead worker at index %u",
                     tid
                 );
                 continue;
             }
 
+            worker = workers[tid];
             type = worker->type;
             pid  = worker->pid;
 
@@ -971,8 +996,10 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
 
                 sleep( 5 );
 
-                if( worker->status == STATUS_DEAD )
+                if( worker->status == STATUS_DEAD && !single_step_only )
                 {
+                    // We ignore single stepping as all shm will be cleaned up
+                    // as the parent exits
                     int status;
                     waitpid( pid, &status, WNOHANG );
 
@@ -990,6 +1017,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
 
                     if( ALLOW_WORKER_RESTART && function != NULL )
                     {
+                        _log( LOG_LEVEL_DEBUG, "In restart block" );
                         if( got_sigterm || got_sigint )
                         {
                             __term();
@@ -1041,23 +1069,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
         }
     }
 
-    // All children dead, exit
-    if( munmap( workers, sizeof( struct worker * ) * ( event_jobs + work_jobs ) ) != 0 )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to free PID table"
-        );
-    }
-
-    if( parent != NULL )
-    {
-        free( parent );
-    }
-
-    free( conninfo );
-    wait( NULL );
-    exit(0);
+    __term();
 }
 
 void _set_process_title( char * title )

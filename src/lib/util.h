@@ -52,6 +52,10 @@
 #define WORKER_TITLE_WORK_PROCESSOR "work queue processor"
 #define WORKER_TITLE_PARENT "Event Manager parent process"
 
+/*
+ *  Structure used to store worker initialization at fork time,
+ *  as well as store worker specific handles
+ */
 struct worker {
     int (*dequeue_function)( struct worker * );
     const char *   channel;
@@ -68,7 +72,7 @@ struct worker {
 
 unsigned int  event_jobs;
 unsigned int  work_jobs;
-
+bool single_step_only;
 char * conninfo;
 sig_atomic_t got_sighup;
 sig_atomic_t got_sigterm;
@@ -98,4 +102,4 @@ bool _rollback_transaction( struct worker * );
 bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
 
-#endif
+#endif // UTIL_H

@@ -62,7 +62,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
             return NULL;
         }
 
-        me->conn= PQconnectdb( conninfo );
+        me->conn = PQconnectdb( conninfo );
     }
 
 #ifdef DEBUG
@@ -82,6 +82,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
     }
 #endif
 
+    // Attempt to execute the query on our handle
     while(
             PQstatus( me->conn ) != CONNECTION_OK &&
             retry_counter < MAX_CONN_RETRIES
@@ -92,10 +93,11 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         {
             _log(
                 LOG_LEVEL_ERROR,
-                "Failed to connect to DB server (%s), while in a transaction."
+                "Failed to connect to DB server (%s), while in a transaction. "
                 "Transaction was automatically aborted",
                 PQerrorMessage( me->conn )
             );
+
             me->tx_in_progress = false;
             return NULL;
         }
@@ -113,7 +115,10 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         );
 
         retry_counter++;
-        last_backoff_time = (int) ( 10 * ( rand() / RAND_MAX ) ) + last_backoff_time;
+        // Randomly increment the backoff counter to prevent constant polling
+        // of a database that may be in recovery
+        last_backoff_time = (int) ( 10 * ( rand() / RAND_MAX ) )
+                          + last_backoff_time;
 
         if( me->conn != NULL )
         {
@@ -234,6 +239,13 @@ void _queue_loop( struct worker * me )
         "Processing queue entries prior to entering main loop"
     );
 
+    if( single_step_only )
+    {
+        _log( LOG_LEVEL_DEBUG, "Single stepping dequeue function." );
+        me->dequeue_function( me );
+        return;
+    }
+
     while( me->dequeue_function( me ) > 0 )
     {
         processed_count++;
@@ -298,6 +310,7 @@ void _queue_loop( struct worker * me )
                 LOG_LEVEL_ERROR,
                 "Exiting after receiving SIGTERM"
             );
+
             break;
         }
 
@@ -372,6 +385,16 @@ void _queue_loop( struct worker * me )
                 LOG_LEVEL_ERROR,
                 "Exiting after receiving SIGTERM"
             );
+            break;
+        }
+
+        if( single_step_only )
+        {
+            _log(
+                LOG_LEVEL_INFO,
+                "exiting after single stepping..."
+            );
+
             break;
         }
     }
@@ -1962,13 +1985,13 @@ void set_session_gucs( struct worker * me, char * session_gucs )
 
 void clear_session_gucs( struct worker * me, char * session_gucs )
 {
-    PGresult *   result           = NULL;
-    jsmntok_t *  json_tokens      = NULL;
-    jsmntok_t    json_key_token   = {0};
-    char *       key              = NULL;
-    char *       params[1]        = {NULL};
-    unsigned int i                = 0;
-    unsigned int max_tokens       = 0;
+    PGresult *   result         = NULL;
+    jsmntok_t *  json_tokens    = NULL;
+    jsmntok_t    json_key_token = {0};
+    char *       key            = NULL;
+    char *       params[1]      = {NULL};
+    unsigned int i              = 0;
+    unsigned int max_tokens     = 0;
 
     if( session_gucs == NULL || strlen( session_gucs ) == 0 )
     {
@@ -2201,6 +2224,6 @@ void _queue_loop_wrapper( void * data )
     _queue_loop( me );
 
     // We should not get here but ehh
-    free_worker( me );
+    me->status = STATUS_DEAD;
     exit( 0 );
 }
