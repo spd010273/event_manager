@@ -956,6 +956,7 @@ GRANT USAGE ON SCHEMA @extschema@ TO public;
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_action', '' );
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_event_table', '' );
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_event_table_work_item', '' );
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_setting', '' );
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_action', '' );
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table', '' );
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table_work_item', '' );
