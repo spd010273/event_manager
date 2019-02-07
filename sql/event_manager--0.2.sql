@@ -157,7 +157,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     when_function           VARCHAR DEFAULT @extschema@.fn_get_config( '@extschema@.default_when_function' ),
     op                      CHAR(1)[],
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN, TRUE ),
-    inverse_event           INTEGER REFERENCES @extschema@.tb_event_table_work_item,
+    inverse_event           INTEGER, -- no fkey to fix restore time errors because pg_depends logic doesn't seem to apply to exts
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 
@@ -538,6 +538,22 @@ RETURNS TRIGGER AS
 DECLARE
     my_pk_column    VARCHAR;
 BEGIN
+    -- Special case logic for restoring backups
+   PERFORM t.oid
+      FROM pg_trigger t
+INNER JOIN pg_class c
+        ON c.oid = t.tgrelid
+       AND c.relname::VARCHAR = NEW.table_name
+INNER JOIN pg_namespace n
+        ON n.oid = c.relnamespace
+       AND n.nspname::VARCHAR = NEW.schema_name
+     WHERE t.tgname = 'tr_event_enqueue';
+
+    IF FOUND THEN
+        RAISE NOTICE 'event enqueue trigger already exists';
+        RETURN NEW;
+    END IF;
+
     SELECT a.attname::VARCHAR
       INTO my_pk_column
       FROM pg_class c
