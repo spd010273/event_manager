@@ -47,6 +47,7 @@ CREATE TABLE @extschema@.tb_setting
     value   VARCHAR,
     CHECK( key ~ '^@extschema@\.' )
 );
+
 CREATE UNIQUE INDEX ix_unique_setting_key ON @extschema@.tb_setting( lower( key ) );
 
 CREATE FUNCTION event_manager.fn_get_config
@@ -102,19 +103,44 @@ CREATE TRIGGER tr_set_configuration
     AFTER INSERT OR UPDATE ON @extschema@.tb_setting
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_set_configuration();
 
+/* Avoid TOC errors on restore by using antijoin when creating defaults */
+WITH tt_unnest AS
+(
+    SELECT unnest(
+               ARRAY[
+                   '@extschema@.execute_asynchronously',
+                   '@extschema@.set_uid_function',
+                   '@extschema@.get_uid_function',
+                   '@extschema@.default_when_function',
+                   '@extschema@.session_gucs',
+                   '@extschema@.base_url'
+               ]::VARCHAR[]
+           ) AS key,
+           unnest(
+               ARRAY[
+                   't',
+                   'NULL',
+                   'NULL',
+                   '@extschema@.fn_dummy_when_function',
+                   '',
+                   'localhost'
+               ]::VARCHAR[]
+           ) AS value
+)
 INSERT INTO @extschema@.tb_setting
             (
                 key,
                 value
             )
-     VALUES ( '@extschema@.execute_asynchronously', 't' ),
-            ( '@extschema@.set_uid_function', 'NULL' ),
-            ( '@extschema@.get_uid_function', 'NULL' ),
-            ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' ),
-            ( '@extschema@.session_gucs', '' ),
-            ( '@extschema@.base_url', 'localhost' );
+     SELECT tt.key,
+            tt.value
+       FROM tt_unnest tt
+  LEFT JOIN @extschema@.tb_setting s
+         ON s.key = tt.key
+      WHERE s.value IS NULL;
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table;
+
 CREATE TABLE @extschema@.tb_event_table
 (
     event_table INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table'),
@@ -123,6 +149,8 @@ CREATE TABLE @extschema@.tb_event_table
     no_trigger  BOOLEAN NOT NULL DEFAULT FALSE
 );
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_event_table', '' );
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table', '' );
 COMMENT ON TABLE @extschema@.tb_event_table IS 'Stores tables being watched for events';
 COMMENT ON COLUMN @extschema@.tb_event_table.schema_name IS 'Stores the schema to which the table belongs';
 COMMENT ON COLUMN @extschema@.tb_event_table.table_name IS 'Stores the table name of the relation';
@@ -142,6 +170,16 @@ CREATE TABLE @extschema@.tb_action
     CHECK( ( method IS NULL OR method IN( 'PUT', 'POST', 'GET' ) ) )
 );
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_action', '' );
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_action', '' );
+COMMENT ON TABLE @extschema@.tb_action IS 'Stores a list of available end results of a given event';
+COMMENT ON COLUMN @extschema@.tb_action.label IS 'User-facing label of the action';
+COMMENT ON COLUMN @extschema@.tb_action.query IS 'Allows the developer to specify DML as the action';
+COMMENT ON COLUMN @extschema@.tb_action.uri IS 'Allows the developer to specify an API endpoint as the action';
+COMMENT ON COLUMN @extschema@.tb_action.method IS 'HTTP method for the above endpoint (PUT,GET,POST)';
+COMMENT ON COLUMN @extschema@.tb_action.static_parameter IS 'A list of static parameters for either the query or URI parameter list';
+COMMENT ON COLUMN @extschema@.tb_action.use_ssl IS 'Indicates that event_manager should turn SSL on in cURL prior to making an HTTP request';
+
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;
 CREATE TABLE @extschema@.tb_event_table_work_item
 (
@@ -157,7 +195,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     when_function           VARCHAR DEFAULT @extschema@.fn_get_config( '@extschema@.default_when_function' ),
     op                      CHAR(1)[],
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN, TRUE ),
-    inverse_event           INTEGER REFERENCES @extschema@.tb_event_table_work_item,
+    inverse_event           INTEGER,,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 
@@ -170,6 +208,8 @@ CREATE UNIQUE INDEX ix_source_action_target_unique ON @extschema@.tb_event_table
 );
 */
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_event_table_work_item', '' );
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table_work_item', '' );
 COMMENT ON TABLE @extschema@.tb_event_table_work_item IS 'A list of actions that should occur for any given event table';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'Indicates the table that can trigger this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.target_event_table IS 'Indicates the target of this work items action. Not necessary but useful for any user interface built around this';
@@ -538,6 +578,22 @@ RETURNS TRIGGER AS
 DECLARE
     my_pk_column    VARCHAR;
 BEGIN
+    -- Specialcase logic for restoring backups
+   PERFORM t.oid
+      FROM pg_trigger t
+INNER JOIN pg_class c
+        ON c.oid = t.tgrelid
+       AND c.relname::VARCHAR = NEW.table_name
+INNER JOIN pg_namespace n
+        ON n.oid = c.relnamespace
+       AND n.nspname::VARCHAR = NEW.schema_name
+     WHERE t.tgname = 'tr_event_enqueue';
+
+    IF FOUND THEN
+        RAISE NOTICE 'event enqueue trigger already exists';
+        RETURN NEW;
+    END IF;
+
     SELECT a.attname::VARCHAR
       INTO my_pk_column
       FROM pg_class c
