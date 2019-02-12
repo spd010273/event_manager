@@ -577,8 +577,8 @@ RETURNS TRIGGER AS
  $_$
 DECLARE
     my_pk_column    VARCHAR;
+    my_pid_count    INTEGER;
 BEGIN
-    -- Specialcase logic for restoring backups
    PERFORM t.oid
       FROM pg_trigger t
 INNER JOIN pg_class c
@@ -609,6 +609,17 @@ INNER JOIN pg_constraint cn
        AND n.nspname::VARCHAR = NEW.schema_name;
 
     IF( my_pk_column IS NULL ) THEN
+        SELECT COUNT( pid )
+          INTO my_pid_count
+          FROM pg_stat_activity
+         WHERE application_name = 'pg_restore'
+           AND datname = current_database();
+        
+        IF my_pid_count > 0 THEN
+            -- This DB is being restored, relax on the validation
+            RETURN NEW;
+        END IF;
+
         RAISE EXCEPTION 'Target table, %.% needs to have a surrogate integer primary key!',
             NEW.schema_name,
             NEW.table_name;
