@@ -177,7 +177,7 @@ COMMENT ON COLUMN @extschema@.tb_action.label IS 'User-facing label of the actio
 COMMENT ON COLUMN @extschema@.tb_action.query IS 'Allows the developer to specify DML as the action';
 COMMENT ON COLUMN @extschema@.tb_action.uri IS 'Allows the developer to specify an API endpoint as the action';
 COMMENT ON COLUMN @extschema@.tb_action.method IS 'HTTP method for the above endpoint (PUT,GET,POST)';
-COMMENT ON COLUMN @extschema@.tb_action.static_parameter IS 'A list of static parameters for either the query or URI parameter list';
+COMMENT ON COLUMN @extschema@.tb_action.static_parameters IS 'A list of static parameters for either the query or URI parameter list';
 COMMENT ON COLUMN @extschema@.tb_action.use_ssl IS 'Indicates that event_manager should turn SSL on in cURL prior to making an HTTP request';
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;
@@ -195,7 +195,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     when_function           VARCHAR DEFAULT @extschema@.fn_get_config( '@extschema@.default_when_function' ),
     op                      CHAR(1)[],
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN, TRUE ),
-    inverse_event           INTEGER,,
+    inverse_event           INTEGER,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 
