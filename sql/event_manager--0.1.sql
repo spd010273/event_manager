@@ -648,8 +648,8 @@ END
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
 
 CREATE TRIGGER tr_new_enqueue_trigger
-    AFTER INSERT ON @extschema@.tb_event_table
-    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_new_event_trigger();
+    AFTER INSERT OR UPDATE OF no_trigger ON @extschema@.tb_event_table
+    FOR EACH ROW WHEN NEW.no_trigger IS FALSE EXECUTE PROCEDURE @extschema@.fn_new_event_trigger();
 
 CREATE FUNCTION @extschema@.fn_remove_event_trigger()
 RETURNS TRIGGER AS
