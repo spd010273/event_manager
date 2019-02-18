@@ -488,8 +488,11 @@ int event_queue_handler( struct worker * me )
 
     if( PQntuples( result ) <= 0 )
     {
+        // This is not useful, especially with > 1 worker on the queue, as all
+        // workers receive the notify but only one wins the dequeue race.
+        // This is especially egregious when the queue is empty
         _log(
-            LOG_LEVEL_WARNING,
+            LOG_LEVEL_DEBUG,
             "Event queue processor received spurious NOTIFY"
         );
 
