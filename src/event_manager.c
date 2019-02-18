@@ -372,7 +372,7 @@ void _queue_loop( struct worker * me )
             }
 
             _log(
-                LOG_LEVEL_INFO,
+                LOG_LEVEL_DEBUG,
                 "Processed %d queue entries",
                 processed_count
             );
