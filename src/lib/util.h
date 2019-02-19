@@ -84,14 +84,21 @@ void _parse_args( int, char ** );
 void _usage( char * ) __attribute__ ((noreturn));
 void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
 
-struct worker * new_worker( unsigned short, unsigned int, void (*function)( void * ), int, char ** );
+struct worker * new_worker(
+    unsigned short,
+    unsigned int,
+    void (*function)( void * ),
+    int,
+    char **,
+    struct worker *
+);
+
 void free_worker( struct worker * worker );
 
 struct worker * get_worker_by_pid( void );
 bool parent_init( int, char ** );
 void * create_shared_memory( size_t );
 void _manage_children( void (*function)( void * ), int, char ** ) __attribute__ ((noreturn));
-void _set_process_title( char * );
 
 void __sigterm( int ) __attribute__ ((noreturn));
 void __sigint( int ) __attribute__ ((noreturn));
@@ -102,4 +109,5 @@ bool _rollback_transaction( struct worker * );
 bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
 
+void _set_process_title( char **, int, char *, unsigned int * );
 #endif // UTIL_H

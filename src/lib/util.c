@@ -22,8 +22,9 @@ bool             single_step_only = false;
 
 extern char ** envorion; // Declared in unistd.h
 
-unsigned int work_jobs  = 0;
-unsigned int event_jobs = 0;
+unsigned int work_jobs     = 0;
+unsigned int event_jobs    = 0;
+unsigned int max_argv_size = 0;
 
 // Flags
 sig_atomic_t got_sighup  = false;
@@ -92,9 +93,11 @@ void _parse_args( int argc, char ** argv )
                 exit( 0 );
             case 'E':
                 event_job_count = optarg;
+                _log( LOG_LEVEL_DEBUG, "Got EJ: %s", event_job_count );
                 break;
             case 'W':
                 work_job_count = optarg;
+                _log( LOG_LEVEL_DEBUG, "Got WJ: %s", work_job_count );
                 break;
             case 'S':
                 single_step_only = true;
@@ -381,7 +384,7 @@ void free_worker( struct worker * worker )
  */
 bool parent_init( int argc, char ** argv )
 {
-    parent = new_worker( WORKER_TYPE_PARENT, 0, NULL, argc, argv );
+    parent = new_worker( WORKER_TYPE_PARENT, 0, NULL, argc, argv, NULL );
 
     if( parent == NULL )
     {
@@ -417,20 +420,29 @@ bool parent_init( int argc, char ** argv )
  *      Emits error on invalid arguments, failure to allocate memory
  */
 struct worker * new_worker(
-    unsigned short type,
-    unsigned int   id,
+    unsigned short  type,
+    unsigned int    id,
     void (*function)( void * ),
-    int            argc,
-    char **        argv
+    int             argc,
+    char **         argv,
+    struct worker * workerslot
 )
 {
     struct worker * result = NULL;
     pid_t           pid    = 0;
     size_t          size   = 0;
 
-    result = ( struct worker * ) create_shared_memory(
-        sizeof( struct worker )
-    );
+    // Iff workerslot is provided, we reuse that SHM space
+    if( workerslot == NULL )
+    {
+        result = ( struct worker * ) create_shared_memory(
+            sizeof( struct worker )
+        );
+    }
+    else
+    {
+        result = workerslot;
+    }
 
     if( result == NULL )
     {
@@ -498,14 +510,16 @@ struct worker * new_worker(
         result->my_argv = argv;
         result->my_argc = argc;
         _log( LOG_LEVEL_DEBUG, "Parent argv: %p argc: %d", argv, argc );
-        _set_process_title( WORKER_TITLE_PARENT );
 
+        // Register signal handlers
         signal( SIGHUP, __sighup );
         signal( SIGTERM, __sigterm );
         signal( SIGINT, __sigint );
+        _set_process_title( argv, argc, WORKER_TITLE_PARENT, &max_argv_size );
         return result;
     }
 
+    _log( LOG_LEVEL_DEBUG, "Remapped PID table slot %u to %p", id, result );
     workers[id] = result;
 
     pid = fork();
@@ -514,6 +528,7 @@ struct worker * new_worker(
     {
         void * data;
 
+        // Get shm struct
         data = ( void * ) get_worker_by_pid();
 
         if( data != NULL )
@@ -525,6 +540,13 @@ struct worker * new_worker(
         _log( LOG_LEVEL_DEBUG, "child argv: %p argc: %d", argv, argc );
         _log( LOG_LEVEL_DEBUG, "Post fork, got data %p", data );
 
+        // Register signal handlers
+        _set_process_title(
+            argv,
+            argc,
+            ( ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR ) ? WORKER_TITLE_EVENT_PROCESSOR : WORKER_TITLE_WORK_PROCESSOR,
+            &max_argv_size
+        );
         signal( SIGHUP, __sighup );
         signal( SIGTERM, __sigterm );
         signal( SIGINT, __sigint );
@@ -959,7 +981,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
     pid_t           pid      = 0;
     bool            alive    = true; // Indicates at least one child is alive
     unsigned int    tid      = 0;
-
+    int             wstatus  = 0;
     //trap parent here
     // TODO: Add child monitoring, config reload support
 
@@ -967,7 +989,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
     {
         sleep( 10 );
         alive = false;
-
+        _log( LOG_LEVEL_DEBUG, "Parent entering maintenance loop" );
         for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
         {
             if( workers[tid] == NULL )
@@ -983,7 +1005,22 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
             worker = workers[tid];
             type = worker->type;
             pid  = worker->pid;
+            waitpid( pid, &wstatus, WNOHANG );
 
+            if( WIFSIGNALED( wstatus ) ) // Detect abnormal exit
+            {
+                worker->status = STATUS_DEAD;
+
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Worker process %d found dead from signal %d",
+                    pid,
+                    WTERMSIG( wstatus )
+                );
+            }
+           
+            wstatus = 0;
+ 
             if( worker->status == STATUS_DEAD )
             {
                 _log(
@@ -1010,11 +1047,6 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
                         waitpid( pid, NULL, WNOHANG );
                     }
 
-                    if( munmap( worker, sizeof( struct worker ) ) != 0 )
-                    {
-                        _log( LOG_LEVEL_ERROR, "Failed to free worker shared memory" );
-                    }
-
                     if( ALLOW_WORKER_RESTART && function != NULL )
                     {
                         _log( LOG_LEVEL_DEBUG, "In restart block" );
@@ -1023,7 +1055,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
                             __term();
                         }
 
-                        worker = new_worker( type, tid, function, argc, argv );
+                        worker = new_worker( type, tid, function, argc, argv, worker );
 
                         if( worker == NULL )
                         {
@@ -1059,6 +1091,24 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
                         }
 
                         workers[tid] = worker;
+                        alive = true;
+                    }
+                    else
+                    {
+                        worker->pid = 0;
+                        worker->type = 0;
+                        worker->status = STATUS_DEAD;
+                        
+                        if( munmap( worker, sizeof( struct worker ) ) != 0 )
+                        {
+                            _log(
+                                LOG_LEVEL_ERROR,
+                                "Failed to free worker shared memory"
+                            );
+                        }
+
+                        workers[tid] = NULL;
+                        worker = NULL;
                     }
                 }
             }
@@ -1072,19 +1122,10 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
     __term();
 }
 
-void _set_process_title( char * title )
+void _set_process_title( char ** argv, int argc, char * title, unsigned int * max_size )
 {
-    char            proc_pid_cmdline_path[PATH_MAX] = {'\0'};
-    char            cmdline[PAGE_SIZE]              = {'\0'};
-    int             env_len                         = -1;
-    FILE *          proc_pid_cmdline                = NULL;
-    char *          args                            = NULL;
-    char **         new_environ                     = NULL;
-    int             argc                            = 0;
-    char **         argv                            = NULL;
-    unsigned int    i                               = 0;
-    unsigned int    size                            = 0;
-    struct worker * me                              = NULL;
+    unsigned int i    = 0;
+    unsigned int size = 0;
 
     if( title == NULL )
     {
@@ -1094,21 +1135,6 @@ void _set_process_title( char * title )
         );
         return;
     }
-
-    me = get_worker_by_pid();
-
-    if( me == NULL )
-    {
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Could not set process title, NULL worker slce"
-        );
-
-        return;
-    }
-
-    argv = me->my_argv;
-    argc = me->my_argc;
 
     if( argv == NULL )
     {
@@ -1120,98 +1146,35 @@ void _set_process_title( char * title )
         return;
     }
 
-
-    sprintf( proc_pid_cmdline_path, "/proc/%d/cmdline", me->pid );
-
-    proc_pid_cmdline = fopen( proc_pid_cmdline_path, "r" );
-
-    if( proc_pid_cmdline == NULL )
+    // Compute ARGV size on first run
+    if( max_size == NULL || *max_size == 0 )
     {
-        // No need to scare the crap out of the user
-        //  we're just trying to set the process title :)
+        size = 0;
+        // Get total size of argv[][]
+        for( i = 0; i < argc; i++ )
+        {
+            if( argv[i] == NULL )
+            {
+                continue;
+            }
+            else
+            {
+                size += ( unsigned int ) ( strlen( argv[i] ) + 1 );
+            }
+        }
+
         _log(
             LOG_LEVEL_DEBUG,
-            "Could not open '%s': %s",
-            proc_pid_cmdline_path,
-            strerror( errno )
+            "Argv total size: %u",
+            size
         );
 
-        return;
+        //memset( argv[0], '\0', size );
+        *max_size = size;
     }
 
-    if( fgets( cmdline, PAGE_SIZE, proc_pid_cmdline ) == NULL )
-    {
-        // EOL
-        _log(
-            LOG_LEVEL_DEBUG,
-            "fgets received EOL"
-        );
-
-        fclose( proc_pid_cmdline );
-        return;
-    }
-
-    fclose( proc_pid_cmdline );
-
-    _log(
-        LOG_LEVEL_DEBUG,
-        "Got %s : %s\nenvironment variable HOME = %s\n",
-        proc_pid_cmdline_path,
-        cmdline,
-        getenv("HOME")
-    );
-
-    if( environ != NULL )
-    {
-        while( environ[++env_len] )
-        {
-            ; // noop
-        }
-    }
-
-    if( env_len > 0 )
-    {
-        size = environ[env_len - 1] + strlen( environ[env_len - 1] ) - argv[0];
-    }
-    else
-    {
-        size = argv[argc - 1] + strlen( argv[argc - 1] ) - argv[0];
-    }
-
-    if( environ )
-    {
-        new_environ = ( char ** ) calloc( env_len, sizeof( char * ) );
-
-        if( new_environ == NULL )
-        {
-            _log(
-                LOG_LEVEL_WARNING,
-                "Could not allocate new environment"
-            );
-            return;
-        }
-
-        i = -1;
-
-        while( environ[++i] )
-        {
-            new_environ[i] = strdup( environ[i] );
-        }
-
-        environ = new_environ;
-    }
-
-    args = argv[0];
-    memset( args, '\0', size );
-
-    _log(
-        LOG_LEVEL_DEBUG,
-        "Process max title size is %u",
-        size
-    );
-
-    strncpy( args, title, size - 1 );
-    // There's a leak when reassigning environ with new_environ, we'll have to look into how to free
-    // this, especially given that the parent may restart a process multiple times
+    size = *max_size;
+    memset( argv[0], '\0', size );
+    strncpy( argv[0], title, strlen( title ) );
     return;
 }

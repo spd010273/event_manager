@@ -1661,6 +1661,7 @@ int main( int argc, char ** argv )
     PGresult *       cyanaudit_result = NULL;
     char *           params[1]        = {NULL};
     unsigned int     tid              = 0;
+    unsigned int     max_argv_size    = 0;
     int              random_ind       = 4; // determined by dice roll
     int              row_count        = 0;
 
@@ -1753,13 +1754,27 @@ int main( int argc, char ** argv )
     for( tid = 0; tid < event_jobs; tid++ )
     {
         _log( LOG_LEVEL_DEBUG, "EL: %d", tid );
-        new_worker( WORKER_TYPE_EVENT_PROCESSOR, tid, &_queue_loop_wrapper, argc, argv );
+        new_worker(
+            WORKER_TYPE_EVENT_PROCESSOR,
+            tid,
+            &_queue_loop_wrapper,
+            argc,
+            argv,
+            NULL
+        );
     }
 
     for( tid = event_jobs; tid < ( work_jobs + event_jobs ); tid++ )
     {
         _log( LOG_LEVEL_DEBUG, "WL: %d", tid );
-        new_worker( WORKER_TYPE_WORK_PROCESSOR, tid, &_queue_loop_wrapper, argc, argv);
+        new_worker(
+            WORKER_TYPE_WORK_PROCESSOR,
+            tid,
+            &_queue_loop_wrapper,
+            argc,
+            argv,
+            NULL
+        );
     }
 
     _manage_children( &_queue_loop_wrapper, argc, argv );
