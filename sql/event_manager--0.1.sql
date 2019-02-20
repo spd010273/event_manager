@@ -754,6 +754,11 @@ BEGIN
                        ) LOOP
         EXECUTE my_statement;
     END LOOP;
+
+    DROP TABLE tt_desired_triggers;
+    DROP TABLE tt_existing_triggers;
+    
+    RETURN;
 END
  $_$
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
