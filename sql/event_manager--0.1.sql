@@ -1094,30 +1094,6 @@ CREATE TRIGGER tr_validate_when_function
     BEFORE INSERT OR UPDATE OF when_function ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_function();
 
-CREATE FUNCTION @extschema@.fn_validate_work_item_reference()
-RETURNS TRIGGER AS
- $_$
-BEGIN
-    -- Perform sanity check on tb_event_table
-    PERFORM *
-       FROM @extschema@.tb_event_table et
- INNER JOIN @extschema@.tb_event_table_work_item etwi
-         ON etwi.source_event_table = et.event_table
-        AND etwi.event_table_work_item = NEW.event_table_work_item
-      WHERE et.no_trigger IS TRUE;
-
-    IF FOUND THEN
-        RAISE EXCEPTION 'Event table work item references a table that does not have a trigger on it. Flip the no_trigger bit on tb_event_table prior to creating events on it';
-    END IF;
-    RETURN NEW;
-END
- $_$
-    LANGUAGE 'plpgsql' STABLE PARALLEL UNSAFE;
-
-CREATE TRIGGER tr_event_table_triggering_sanity_check
-    AFTER INSERT OR UPDATE OF source_event_table ON @extschema@.tb_event_table_work_item
-    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_work_item_reference();
-
 GRANT ALL ON @extschema@.tb_event_queue TO public;
 GRANT ALL ON @extschema@.tb_work_queue TO public;
 GRANT SELECT ON @extschema@.tb_event_table_work_item TO public;
