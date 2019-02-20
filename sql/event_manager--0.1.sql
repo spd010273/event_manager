@@ -50,7 +50,7 @@ CREATE TABLE @extschema@.tb_setting
 
 CREATE UNIQUE INDEX ix_unique_setting_key ON @extschema@.tb_setting( lower( key ) );
 
-CREATE FUNCTION event_manager.fn_get_config
+CREATE FUNCTION @extschema@.fn_get_config
 (
     in_name VARCHAR
 )
@@ -60,7 +60,7 @@ RETURNS VARCHAR AS
                NULLIF( current_setting( in_name, TRUE ), '' ),
                (
                    SELECT set_config( key, value, TRUE )
-                     FROM event_manager.tb_setting
+                     FROM @extschema@.tb_setting
                     WHERE key = in_name
                )
            );
@@ -145,8 +145,7 @@ CREATE TABLE @extschema@.tb_event_table
 (
     event_table INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table'),
     schema_name VARCHAR NOT NULL DEFAULT 'public',
-    table_name  VARCHAR(63) NOT NULL UNIQUE,
-    no_trigger  BOOLEAN NOT NULL DEFAULT FALSE
+    table_name  VARCHAR(63) NOT NULL UNIQUE
 );
 
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_event_table', '' );
@@ -154,7 +153,6 @@ SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table', '' );
 COMMENT ON TABLE @extschema@.tb_event_table IS 'Stores tables being watched for events';
 COMMENT ON COLUMN @extschema@.tb_event_table.schema_name IS 'Stores the schema to which the table belongs';
 COMMENT ON COLUMN @extschema@.tb_event_table.table_name IS 'Stores the table name of the relation';
-COMMENT ON COLUMN @extschema@.tb_event_table.no_trigger IS 'Indicates that this entry is only referenced by target_event_table (to be used by middleware for determining scope of action)';
 
 CREATE SEQUENCE @extschema@.sq_pk_action;
 CREATE TABLE @extschema@.tb_action
@@ -213,7 +211,7 @@ SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table_work_ite
 COMMENT ON TABLE @extschema@.tb_event_table_work_item IS 'A list of actions that should occur for any given event table';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'Indicates the table that can trigger this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.target_event_table IS 'Indicates the target of this work items action. Not necessary but useful for any user interface built around this';
-COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_column_name IS 'Indicated the column of the source table this event if firing on. This is not used for selectively firing update triggers but to help prevent the user from implementing identical/similar events';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_column_name IS 'Indicated the column of the source table this event if firing on. This is not used for selectively firing update triggers but to help prevent the user from implementing identical/similar events. NOTE: This column can be comma delimited';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.action IS 'Foreign key to tb_action - indicates what this work item generates parameters for';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.label IS 'User-facing label for this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.description IS 'User-facing description for that this work item is / does';
@@ -222,7 +220,7 @@ COMMENT ON COLUMN @extschema@.tb_event_table_work_item.work_item_query IS 'Gener
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.when_function IS 'Filters events entering tb_event_queue. Example prototype is fn_dummy_when_function. Function should return BOOLEAN';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.op IS 'Indicates what DML operation this work item applies: U - Update, I - Insert, D - Delete.';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.execute_asynchronously IS 'Determines what mode of execution this work item will be ran under.';
-COMMENT ON COLUMN @extschema@.tb_event_table_work_item.inverse_event IS 'Indicates that this event has an inverse event buy linking to it'; 
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.inverse_event IS 'Indicates that this event has an inverse event buy linking to it';
 
 DO
  $_$
@@ -572,116 +570,216 @@ CREATE TRIGGER tr_no_ddl_check
     BEFORE INSERT OR UPDATE ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_no_ddl_check( 'work_item_query' );
 
-CREATE FUNCTION @extschema@.fn_new_event_trigger()
-RETURNS TRIGGER AS
+CREATE FUNCTION @extschema@.fn_manage_triggers()
+RETURNS VOID AS
  $_$
 DECLARE
-    my_pk_column    VARCHAR;
-    my_pid_count    INTEGER;
+    my_statement    VARCHAR;
 BEGIN
-   PERFORM t.oid
-      FROM pg_trigger t
-INNER JOIN pg_class c
-        ON c.oid = t.tgrelid
-       AND c.relname::VARCHAR = NEW.table_name
-INNER JOIN pg_namespace n
-        ON n.oid = c.relnamespace
-       AND n.nspname::VARCHAR = NEW.schema_name
-     WHERE t.tgname = 'tr_event_enqueue';
+    PERFORM pid
+       FROM pg_catalog.pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = 'pg_restore';
 
     IF FOUND THEN
-        RAISE NOTICE 'event enqueue trigger already exists';
+        RETURN;
+    END IF;
+
+    CREATE TEMP TABLE tt_desired_triggers AS
+    (
+        WITH tt_op_expansion AS
+        (
+            SELECT source_event_table,
+                   unnest( regexp_split_to_array( source_column_name, ',' ) ) AS source_column_name,
+                   unnest( op ) AS op
+              FROM @extschema@.tb_event_table_work_item
+        ),
+        tt_aggregate AS
+        (
+            SELECT n.nspname::VARCHAR AS schema_name,
+                   c.relname::VARCHAR AS table_name,
+                   array_agg( DISTINCT a.attname::VARCHAR ) AS column_name,
+                   a_pk.attname::VARCHAR AS primary_key,
+                   array_agg( DISTINCT tt.op ) AS op
+              FROM @extschema@.tb_event_table et
+        INNER JOIN tt_op_expansion tt
+                ON tt.source_event_table = et.event_table
+        INNER JOIN pg_catalog.pg_class c
+                ON c.relname::VARCHAR = et.table_name
+        INNER JOIN pg_catalog.pg_namespace n
+                ON n.oid = c.relnamespace
+               AND n.nspname::VARCHAR = et.schema_name
+         LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = c.oid
+               AND a.attnum > 0
+               AND a.attname::VARCHAR = tt.source_column_name
+        INNER JOIN pg_catalog.pg_attribute a_pk
+                ON a_pk.attrelid = c.oid
+               AND a_pk.attnum > 0
+        INNER JOIN pg_catalog.pg_constraint cn
+                ON cn.conrelid = c.oid
+               AND cn.contype = 'p'
+               AND cn.conkey[1] = a_pk.attnum
+          GROUP BY n.nspname,
+                   c.relname,
+                   a_pk.attname
+        )
+            SELECT schema_name,
+                   table_name,
+                   ( SELECT array_agg( col ) FROM unnest( column_name ) col WHERE col IS NOT NULL ) AS column_name,
+                   primary_key,
+                   CASE WHEN 'I' = ANY( op ) THEN TRUE
+                        ELSE FALSE
+                         END AS i,
+                   CASE WHEN 'U' = ANY( op ) THEN TRUE
+                        ELSE FALSE
+                         END AS u,
+                   CASE WHEN 'D' = ANY( op ) THEN TRUE
+                        ELSE FALSE
+                         END AS d
+              FROM tt_aggregate
+    );
+
+    CREATE TEMP TABLE tt_existing_triggers AS
+    (
+        WITH tt_triggers AS
+        (
+            SELECT nc.nspname::VARCHAR AS schema_name,
+                   c.relname::VARCHAR AS table_name,
+                   array_agg( DISTINCT a.attname::VARCHAR ) AS column_name,
+                   a_pk.attname::VARCHAR AS primary_key,
+                   CASE WHEN ( ( t.tgtype::int4::bit(16) ) << 13 )::bit = 1::BIT THEN TRUE
+                        ELSE FALSE
+                         END AS i,
+                   CASE WHEN ( ( t.tgtype::int4::bit(16) ) << 12 )::bit = 1::BIT THEN TRUE
+                        ELSE FALSE
+                         END AS u,
+                   CASE WHEN ( ( t.tgtype::int4::bit(16) ) << 11 )::bit = 1::bit THEN TRUE
+                        ELSE FALSE
+                         END AS d
+              FROM pg_catalog.pg_trigger t
+        INNER JOIN pg_catalog.pg_proc p
+                ON p.oid = t.tgfoid
+               AND p.proname::VARCHAR = 'fn_enqueue_event'
+        INNER JOIN pg_catalog.pg_namespace n
+                ON n.oid = p.pronamespace
+               AND n.nspname::VARCHAR = '@extschema@'
+        INNER JOIN pg_catalog.pg_class c
+                ON c.oid = t.tgrelid
+         LEFT JOIN pg_catalog.pg_attribute a
+                ON a.attrelid = c.oid
+               AND a.attnum > 0
+               AND a.attnum = ANY( t.tgattr )
+        INNER JOIN pg_catalog.pg_attribute a_pk
+                ON a_pk.attnum > 0
+               AND a_pk.attrelid = c.oid
+        INNER JOIN pg_catalog.pg_constraint cn
+                ON cn.conrelid = c.oid
+               AND cn.contype = 'p'
+               AND cn.conkey[1] = a_pk.attnum
+        INNER JOIN pg_catalog.pg_namespace nc
+                ON nc.oid = c.relnamespace
+             WHERE t.tgname::VARCHAR = 'tr_event_enqueue'
+          GROUP BY nc.nspname,
+                   c.relname,
+                   a_pk.attname,
+                   t.tgtype
+        )
+            SELECT schema_name,
+                   table_name,
+                   ( SELECT array_agg( col ) FROM unnest( column_name ) col WHERE col IS NOT NULL ) AS column_name,
+                   primary_key,
+                   i,
+                   u,
+                   d
+              FROM tt_triggers
+    );
+
+    FOR my_statement IN(
+                SELECT 'DROP TRIGGER tr_event_enqueue ON ' || COALESCE( tte.schema_name || '.', '' ) || tte.table_name
+                  FROM tt_existing_triggers tte
+             LEFT JOIN tt_desired_triggers ttd
+                    ON ttd.table_name = tte.table_name
+                   AND ttd.schema_name = tte.schema_name
+                 WHERE ttd.primary_key IS NULL
+                    OR (
+                            ttd.primary_key IS DISTINCT FROM tte.primary_key
+                         OR ttd.column_name IS DISTINCT FROM tte.column_name
+                         OR ttd.i IS DISTINCT FROM tte.i
+                         OR ttd.u IS DISTINCT FROM tte.u
+                         OR ttd.d IS DISTINCT FROM tte.d
+                       )
+                       ) LOOP
+        EXECUTE my_statement;
+    END LOOP;
+
+    DELETE FROM tt_existing_triggers tte
+          USING tt_desired_triggers ttd
+          WHERE tte.schema_name = ttd.schema_name
+            AND tte.table_name = ttd.table_name
+            AND (
+                    tte.primary_key IS DISTINCT FROM ttd.primary_key
+                 OR tte.column_name IS DISTINCT FROM ttd.column_name
+                 OR tte.i IS DISTINCT FROM ttd.i
+                 OR tte.u IS DISTINCT FROM ttd.u
+                 OR tte.d IS DISTINCT FROM ttd.d
+                );
+
+    FOR my_statement IN(
+                SELECT FORMAT(
+                           'CREATE TRIGGER tr_event_enqueue AFTER '
+                        || array_to_string(
+                               ARRAY[
+                                   CASE WHEN ttd.i IS TRUE THEN 'INSERT' ELSE NULL END,
+                                   CASE WHEN ttd.u IS TRUE THEN
+                                                           CASE WHEN array_length( ttd.column_name, 1 ) >= 1
+                                                                THEN 'UPDATE OF ' || array_to_string( ttd.column_name, ', ' )
+                                                                ELSE 'UPDATE'
+                                                                 END
+                                                           ELSE NULL
+                                                            END,
+                                   CASE WHEN ttd.d IS TRUE THEN 'DELETE' ELSE NULL END
+                               ]::VARCHAR[],
+                               ' OR '
+                           )
+                        || ' ON ' || COALESCE( ttd.schema_name || '.', '' ) || ttd.table_name
+                        || ' FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_enqueue_event( %L )',
+                           ttd.primary_key
+                        ) AS tgdef
+                   FROM tt_desired_triggers ttd
+              LEFT JOIN tt_existing_triggers tte
+                     ON tte.schema_name = ttd.schema_name
+                    AND tte.table_name = ttd.table_name
+                  WHERE tte.primary_key IS NULL
+                       ) LOOP
+        EXECUTE my_statement;
+    END LOOP;
+END
+ $_$
+    LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
+
+CREATE FUNCTION @extschema@.fn_manage_trigger_wrapper()
+RETURNS TRIGGER AS
+ $_$
+BEGIN
+    PERFORM @extschema@.fn_manage_triggers();
+
+    IF( TG_OP = 'DELETE' ) THEN
+        RETURN OLD;
+    ELSE
         RETURN NEW;
     END IF;
-
-    SELECT a.attname::VARCHAR
-      INTO my_pk_column
-      FROM pg_class c
-INNER JOIN pg_namespace n
-        ON n.oid = c.relnamespace
-INNER JOIN pg_attribute a
-        ON a.attrelid = c.oid
-INNER JOIN pg_constraint cn
-        ON cn.conrelid = c.oid
-       AND cn.contype = 'p'
-       AND cn.conkey[1] = a.attnum
-     WHERE c.relname::VARCHAR = NEW.table_name
-       AND n.nspname::VARCHAR = NEW.schema_name;
-
-    IF( my_pk_column IS NULL ) THEN
-        SELECT COUNT( pid )
-          INTO my_pid_count
-          FROM pg_stat_activity
-         WHERE application_name = 'pg_restore'
-           AND datname = current_database();
-        
-        IF my_pid_count > 0 THEN
-            -- This DB is being restored, relax on the validation
-            RETURN NEW;
-        END IF;
-
-        RAISE EXCEPTION 'Target table, %.% needs to have a surrogate integer primary key!',
-            NEW.schema_name,
-            NEW.table_name;
-    END IF;
-
-    IF( NEW.no_trigger IS TRUE ) THEN
-        RETURN NEW;
-    END IF;
-
-    EXECUTE format(
-                'CREATE TRIGGER tr_event_enqueue '
-             || '    AFTER INSERT OR UPDATE OR DELETE ON %I.%I '
-             || '    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_enqueue_event( %L );',
-                NEW.schema_name,
-                NEW.table_name,
-                my_pk_column
-            );
-
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
-        RAISE DEBUG '@extschema@: created trigger on %.%', NEW.schema_name, NEW.column_name;
-    END IF;
-
-    RETURN NEW;
 END
  $_$
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
 
 CREATE TRIGGER tr_new_enqueue_trigger
-    AFTER INSERT OR UPDATE OF no_trigger ON @extschema@.tb_event_table
-    FOR EACH ROW WHEN ( NEW.no_trigger IS FALSE ) EXECUTE PROCEDURE @extschema@.fn_new_event_trigger();
+    AFTER INSERT OR UPDATE OR DELETE ON @extschema@.tb_event_table
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_manage_trigger_wrapper();
 
-CREATE FUNCTION @extschema@.fn_remove_event_trigger()
-RETURNS TRIGGER AS
- $_$
-BEGIN
-    IF( OLD.no_trigger IS TRUE ) THEN
-        RETURN OLD;
-    END IF;
-
-    EXECUTE format(
-                'DROP TRIGGER tr_event_enqueue '
-             || ' ON %I.%I',
-                OLD.schema_name,
-                OLD.table_name
-            );
-
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
-        RAISE DEBUG '@extschema@: dropped event trigger on %.%', OLD.schema_name, OLD.table_name;
-    END IF;
-
-    RETURN OLD;
-END
- $_$
-    LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
-
-CREATE TRIGGER tr_remove_enqueue_trigger_update
-    AFTER UPDATE OF no_trigger ON @extschema@.tb_event_table
-    FOR EACH ROW WHEN ( NEW.no_trigger IS TRUE ) EXECUTE PROCEDURE @extschema@.fn_remove_event_trigger();
-
-CREATE TRIGGER tr_remove_enqueue_trigger_delete
-    AFTER DELETE ON @extschema@.tb_event_table
-    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_remove_event_trigger();
+CREATE TRIGGER tr_new_enqueue_trigger
+    AFTER INSERT OR UPDATE OF source_event_table, source_column_name OR DELETE ON @extschema@.tb_event_table_work_item
+    FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_manage_trigger_wrapper();
 
 CREATE OR REPLACE FUNCTION @extschema@.fn_handle_new_event_queue_item()
 RETURNS TRIGGER AS
