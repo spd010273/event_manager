@@ -1661,7 +1661,6 @@ int main( int argc, char ** argv )
     PGresult *       cyanaudit_result = NULL;
     char *           params[1]        = {NULL};
     unsigned int     tid              = 0;
-    unsigned int     max_argv_size    = 0;
     int              random_ind       = 4; // determined by dice roll
     int              row_count        = 0;
 
