@@ -13,11 +13,7 @@
 
 #ifndef EVENT_MANAGER_H
 #define EVENT_MANAGER_H
-//#include <libpq-fe.h>
-//#include <stdio.h>
-//#include <stdlib.h>
-//#include <unistd.h>
-//#include <stdbool.h>
+
 #include <math.h>
 #include <string.h>
 #include <errno.h>
@@ -92,7 +88,7 @@ bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
 void set_session_gucs( struct worker *, char * );
 void clear_session_gucs( struct worker *, char * );
-
+char * set_application_name( char * );
 // Integration functions
 void _cyanaudit_integration( struct worker *, char * );
 

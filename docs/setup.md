@@ -12,7 +12,7 @@ PostgreSQL 10.2 = postgresql10-server
 
 ```bash
 yum update
-yum install postgresql<version>-devel postgresql<version>-libs gcc git libtool make
+yum install postgresql<version>-devel postgresql<version>-libs gcc git libtool make libcurl-devel
 
 which pg_config | grep 'no\spg_config' # Make sure it is in the users PATH
 

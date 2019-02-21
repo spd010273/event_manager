@@ -43,10 +43,12 @@ bool   cyanaudit_installed = false;
 
 PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
 {
-    PGresult * result            = NULL;
-    int        retry_counter     = 0;
-    int        last_backoff_time = 0;
-    char *     last_sql_state    = NULL;
+    PGresult * result                      = NULL;
+    int        retry_counter               = 0;
+    int        last_backoff_time           = 0;
+    char *     last_sql_state              = NULL;
+    PGresult * set_application_name_result = NULL;
+    char *     my_application_name         = NULL;
 #ifdef DEBUG
     int        i = 0;
 #endif
@@ -141,6 +143,41 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         "Connection OK"
     );
 
+    // Set the application name so DBA's (and the on-call team) know what the
+    // heck is going on!
+    my_application_name = set_application_name(
+            me->type == WORKER_TYPE_PARENT ? WORKER_TITLE_PARENT :
+            me->type == WORKER_TYPE_EVENT_PROCESSOR ? WORKER_TITLE_EVENT_PROCESSOR :
+            WORKER_TITLE_WORK_PROCESSOR
+    );
+   
+    if( my_application_name != NULL )
+    {
+        set_application_name_result = PQexec(
+            me->conn,
+            my_application_name
+        );
+
+        if( PQresultStatus( set_application_name_result ) != PGRES_COMMAND_OK )
+        {
+            _log(
+                LOG_LEVEL_WARNING,
+                "Failed to set application name! :(((("
+            );
+        }
+
+        if( set_application_name_result != NULL )
+        {
+            PQclear( set_application_name_result );
+        }
+        else
+        {
+            _log( LOG_LEVEL_DEBUG, "result handle null my dude" );
+        }
+
+        free( my_application_name );
+    }
+    
     while(
              (
                  last_sql_state == NULL // No state (first pass)
@@ -232,7 +269,7 @@ void _queue_loop( struct worker * me )
     char *     listen_command  = NULL;
     PGresult * listen_result   = NULL;
     int        processed_count = 0;
-
+    
     // Check queue prior to entering main loop
     _log(
         LOG_LEVEL_DEBUG,
@@ -2243,4 +2280,27 @@ void _queue_loop_wrapper( void * data )
     // We should not get here but ehh
     me->status = STATUS_DEAD;
     exit( 0 );
+}
+
+char * set_application_name( char* application_name )
+{
+    char* base_query           = "SET application_name = '";
+    int base_query_bytes       = strlen( base_query ) + 2;
+    int application_name_bytes = strlen( application_name );
+
+    char* query = calloc(
+        sizeof( char ),
+        base_query_bytes + application_name_bytes
+    );
+
+    if( query == NULL )
+    {
+        return NULL;
+    }
+
+    strncpy( query, base_query, base_query_bytes );
+    strncat( query, application_name, application_name_bytes );
+    strncat( query, "'", 1 );
+
+    return query;
 }
