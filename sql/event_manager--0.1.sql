@@ -252,6 +252,7 @@ ALTER TABLE @extschema@.tb_event_queue
     ADD COLUMN session_values JSONB,
     ADD CONSTRAINT op_check CHECK ( ( op IN( 'D', 'U', 'I' ) ) );
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_queue', '' );
 COMMENT ON TABLE @extschema@.tb_event_queue IS 'Queue for events arriving from tb_event_tables. Contents are copied from their corresponding event_table_work_item entry.';
 COMMENT ON COLUMN @extschema@.tb_event_queue.event_table_work_item IS 'reference to the trigger deinition this event corresponds to';
 COMMENT ON COLUMN @extschema@.tb_event_queue.uid IS 'Stores the optional session-level user identifier that triggered this event, set by the @extschema@.get_uid_function call';
@@ -290,6 +291,7 @@ ALTER TABLE @extschema@.tb_work_queue
     ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN,
     ADD COLUMN session_values JSONB;
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_work_queue', '' );
 COMMENT ON TABLE @extschema@.tb_work_queue IS 'Queue for work_item_query results. Remaining contents copied from the corresponding event_queue entry';
 COMMENT ON COLUMN @extschema@.tb_work_queue.parameters IS 'Parameters returned by work_item_query';
 COMMENT ON COLUMN @extschema@.tb_work_queue.action IS 'Action that will be executed';
@@ -299,8 +301,6 @@ COMMENT ON COLUMN @extschema@.tb_work_queue.transaction_label IS 'Label for tran
 COMMENT ON COLUMN @extschema@.tb_work_queue.execute_asynchronously IS 'Indicates how this action should be executed';
 COMMENT ON COLUMN @extschema@.tb_work_queue.session_values IS 'Copy of the session values from the event queue';
 
-
-CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance
 (
     event_table_work_item_instance INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item_instance'),
@@ -311,8 +311,13 @@ CREATE TABLE @extschema@.tb_event_table_work_item_instance
     CHECK( source_pk IS NOT NULL OR target_pk IS NOT NULL )
 );
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_event_table_work_item_instance', '' );
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table_work_item_instance', '' );
 COMMENT ON TABLE @extschema@.tb_event_table_work_item_instance IS 'Can be used to aid work item queries or action queries when the scope of an action query is non-deterministic or too broad. This table is intended for use by any integrating application, but is not required';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item_instance.metadata IS 'Can be used to store static parameters for an instance of a event_table_work_item';
+
+CREATE INDEX ix_event_table_work_item_instance_src ON @extschema@.tb_event_table_work_item_instance( event_table_work_item, source_pk );
+CREATE INDEX ix_event_table_work_item_instance_tgt ON @extschema@.tb_event_table_work_item_instance( event_table_work_item, target_pk );
 
 CREATE OR REPLACE FUNCTION @extschema@.fn_dummy_when_function
 (
