@@ -380,7 +380,7 @@ BEGIN
         AND application_name = 'pg_restore';
 
     IF FOUND THEN
-        RETURN;
+        RETURN NEW;
     END IF;
 
     PERFORM *
