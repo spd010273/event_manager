@@ -301,6 +301,7 @@ COMMENT ON COLUMN @extschema@.tb_work_queue.transaction_label IS 'Label for tran
 COMMENT ON COLUMN @extschema@.tb_work_queue.execute_asynchronously IS 'Indicates how this action should be executed';
 COMMENT ON COLUMN @extschema@.tb_work_queue.session_values IS 'Copy of the session values from the event queue';
 
+CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance
 (
     event_table_work_item_instance INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item_instance'),
