@@ -334,6 +334,15 @@ RETURNS TRIGGER AS
 DECLARE
     my_work_item_query  VARCHAR;
 BEGIN
+    PERFORM pid
+       FROM pg_catalog.pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = 'pg_restore';
+
+    IF FOUND THEN
+        RETURN NEW;
+    END IF;
+
     my_work_item_query := regexp_replace( NEW.work_item_query, '\?[\.\w]+\?', 'NULL', 'g' );
 
     EXECUTE 'CREATE TEMP TABLE tt_work_item_test AS( ' || my_work_item_query || ' LIMIT 0)';
@@ -365,6 +374,15 @@ CREATE OR REPLACE FUNCTION @extschema@.fn_catalog_check()
 RETURNS TRIGGER AS
  $_$
 BEGIN
+    PERFORM pid
+       FROM pg_catalog.pg_stat_activity
+      WHERE datname = current_database()
+        AND application_name = 'pg_restore';
+
+    IF FOUND THEN
+        RETURN;
+    END IF;
+
     PERFORM *
        FROM pg_class c
  INNER JOIN pg_namespace n
