@@ -143,4 +143,6 @@ static const char * set_guc = "\
 static const char * clear_guc = "\
     SELECT set_config( $1, NULL, TRUE )";
 
+static const char * set_application_name = "\
+    SET application_name = '";
 #endif

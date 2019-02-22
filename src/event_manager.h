@@ -88,7 +88,7 @@ bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
 void set_session_gucs( struct worker *, char * );
 void clear_session_gucs( struct worker *, char * );
-char * set_application_name( char * );
+void _set_application_name( struct worker * );
 // Integration functions
 void _cyanaudit_integration( struct worker *, char * );
 

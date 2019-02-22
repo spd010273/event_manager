@@ -47,8 +47,6 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
     int        retry_counter               = 0;
     int        last_backoff_time           = 0;
     char *     last_sql_state              = NULL;
-    PGresult * set_application_name_result = NULL;
-    char *     my_application_name         = NULL;
 #ifdef DEBUG
     int        i = 0;
 #endif
@@ -136,6 +134,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
 
         sleep( last_backoff_time );
         me->conn = PQconnectdb( conninfo );
+        _set_application_name( me ); // May fail if we haven't connected
     }
 
     _log(
@@ -143,41 +142,6 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         "Connection OK"
     );
 
-    // Set the application name so DBA's (and the on-call team) know what the
-    // heck is going on!
-    my_application_name = set_application_name(
-            me->type == WORKER_TYPE_PARENT ? WORKER_TITLE_PARENT :
-            me->type == WORKER_TYPE_EVENT_PROCESSOR ? WORKER_TITLE_EVENT_PROCESSOR :
-            WORKER_TITLE_WORK_PROCESSOR
-    );
-   
-    if( my_application_name != NULL )
-    {
-        set_application_name_result = PQexec(
-            me->conn,
-            my_application_name
-        );
-
-        if( PQresultStatus( set_application_name_result ) != PGRES_COMMAND_OK )
-        {
-            _log(
-                LOG_LEVEL_WARNING,
-                "Failed to set application name! :(((("
-            );
-        }
-
-        if( set_application_name_result != NULL )
-        {
-            PQclear( set_application_name_result );
-        }
-        else
-        {
-            _log( LOG_LEVEL_DEBUG, "result handle null my dude" );
-        }
-
-        free( my_application_name );
-    }
-    
     while(
              (
                  last_sql_state == NULL // No state (first pass)
@@ -269,7 +233,7 @@ void _queue_loop( struct worker * me )
     char *     listen_command  = NULL;
     PGresult * listen_result   = NULL;
     int        processed_count = 0;
-    
+
     // Check queue prior to entering main loop
     _log(
         LOG_LEVEL_DEBUG,
@@ -2272,7 +2236,7 @@ void _queue_loop_wrapper( void * data )
     }
 
     PQclear( conn_test );
-
+    _set_application_name( me );
     // Start main loop
     me->status = STATUS_WORKING;
     _queue_loop( me );
@@ -2282,25 +2246,96 @@ void _queue_loop_wrapper( void * data )
     exit( 0 );
 }
 
-char * set_application_name( char* application_name )
+void _set_application_name( struct worker * me )
 {
-    char* base_query           = "SET application_name = '";
-    int base_query_bytes       = strlen( base_query ) + 2;
-    int application_name_bytes = strlen( application_name );
+    char *       application_name_command = NULL;
+    PGresult *   result                   = NULL;
+    unsigned int malloc_size              = 0;
 
-    char* query = calloc(
-        sizeof( char ),
-        base_query_bytes + application_name_bytes
-    );
-
-    if( query == NULL )
+    if( me == NULL || me->conn == NULL )
     {
-        return NULL;
+        return;
     }
 
-    strncpy( query, base_query, base_query_bytes );
-    strncat( query, application_name, application_name_bytes );
-    strncat( query, "'", 1 );
+    malloc_size = strlen( set_application_name ) + 2;
 
-    return query;
+    if( me->type == WORKER_TYPE_PARENT )
+    {
+        malloc_size += strlen( WORKER_TITLE_PARENT );
+    }
+    else if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
+    {
+        malloc_size += strlen( WORKER_TITLE_EVENT_PROCESSOR );
+    }
+    else if( me->type == WORKER_TYPE_WORK_PROCESSOR )
+    {
+        malloc_size += strlen( WORKER_TITLE_WORK_PROCESSOR );
+    }
+    else
+    {
+        return;
+    }
+
+    application_name_command = ( char * ) calloc(
+        sizeof( char ),
+        malloc_size
+    );
+
+    if( application_name_command == NULL )
+    {
+        return;
+    }
+
+    strncpy(
+        application_name_command,
+        set_application_name,
+        strlen( set_application_name )
+    );
+
+    if( me->type == WORKER_TYPE_PARENT )
+    {
+        strncat(
+            application_name_command,
+            WORKER_TITLE_PARENT,
+            strlen( WORKER_TITLE_PARENT )
+        );
+    }
+    else if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
+    {
+        strncat(
+            application_name_command,
+            WORKER_TITLE_EVENT_PROCESSOR,
+            strlen( WORKER_TITLE_EVENT_PROCESSOR )
+        );
+    }
+    else
+    {
+        strncat(
+            application_name_command,
+            WORKER_TITLE_WORK_PROCESSOR,
+            strlen( WORKER_TITLE_WORK_PROCESSOR )
+        );
+    }
+
+    strncat( application_name_command, "'\0", 2 );
+
+    result = PQexec(
+        me->conn,
+        application_name_command
+    );
+
+    if(
+            PQresultStatus( result ) != PGRES_COMMAND_OK
+         && PQresultStatus( result ) != PGRES_TUPLES_OK
+      )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Failed to set application_name"
+        );
+    }
+
+    PQclear( result );
+    free( application_name_command );
+    return;
 }
