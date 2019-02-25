@@ -397,7 +397,7 @@ void _add_parameter_to_query(
 
             return;
         }
-       
+
         _log( LOG_LEVEL_DEBUG, "Found match for key '%s'", bindpoint_search );
 
         bind_counter++;
@@ -1030,6 +1030,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
     regex_t          regex                         = {0};
     char *           bindpoint_search              = NULL;
     char *           temp_string                   = NULL;
+    char *           temp_value                    = NULL;
     unsigned int     bind_length                   = 0;
     unsigned int     i                             = 0;
     int              reg_result                    = 0;
@@ -1140,12 +1141,21 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
 
             bind_length = matches[0].rm_eo - matches[0].rm_so;
 
+            if( key_value_pair->value == NULL )
+            {
+                temp_value = "''";
+            }
+            else
+            {
+                temp_value = key_value_pair->value;
+            }
+
             temp_string = ( char * ) calloc(
                 (
-                    strlen( (*uri) )                // Original string
-                  - bind_length                     // What we are replacing
-                  + strlen( key_value_pair->value ) // What is replacing ^
-                  + 1                               // NULL terminator
+                    strlen( (*uri) )      // Original string
+                  - bind_length           // What we are replacing
+                  + strlen( temp_value )  // What is replacing ^
+                  + 1                     // NULL terminator
                 ),
                 sizeof( char )
             );
@@ -1170,7 +1180,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
 
             strcat(
                 temp_string,
-                key_value_pair->value
+                temp_value
             );
 
             strcat(
@@ -1212,7 +1222,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
             LOG_LEVEL_DEBUG,
             "Potentially bound KV %s,%s to %s",
             key_value_pair->key,
-            key_value_pair->value,
+            temp_value,
             (*uri)
         );
 
