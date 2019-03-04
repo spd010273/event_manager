@@ -39,6 +39,7 @@
 #define STATUS_DEAD 0
 #define STATUS_STARTUP 1
 #define STATUS_WORKING 2
+#define STATUS_RELOAD 4
 
 #define ALLOW_WORKER_RESTART true
 #define MAX_WORKERS 16
@@ -72,11 +73,14 @@ struct worker {
 
 unsigned int  event_jobs;
 unsigned int  work_jobs;
+
 bool single_step_only;
 char * conninfo;
+
 sig_atomic_t got_sighup;
 sig_atomic_t got_sigterm;
 sig_atomic_t got_sigint;
+
 struct worker ** workers;
 struct worker * parent;
 
@@ -98,7 +102,7 @@ void free_worker( struct worker * worker );
 struct worker * get_worker_by_pid( void );
 bool parent_init( int, char ** );
 void * create_shared_memory( size_t );
-void _manage_children( void (*function)( void * ), int, char ** ) __attribute__ ((noreturn));
+void _manage_children( void (*function)( void * ) ) __attribute__ ((noreturn));
 
 void __sigterm( int ) __attribute__ ((noreturn));
 void __sigint( int ) __attribute__ ((noreturn));

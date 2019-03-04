@@ -377,6 +377,7 @@ void _queue_loop( struct worker * me )
                 "Processed %d queue entries",
                 processed_count
             );
+
             processed_count = 0;
         }
 
@@ -1777,7 +1778,7 @@ int main( int argc, char ** argv )
         );
     }
 
-    _manage_children( &_queue_loop_wrapper, argc, argv );
+    _manage_children( &_queue_loop_wrapper );
 
     return 0;
 }
@@ -1850,6 +1851,7 @@ void set_session_gucs( struct worker * me, char * session_gucs )
     }
 
     i = 1;
+
     for(;;)
     {
         json_key_token = json_tokens[i];
@@ -1939,6 +1941,7 @@ void set_session_gucs( struct worker * me, char * session_gucs )
 
         params[0] = key;
         params[1] = value;
+
         result = _execute_query(
             me,
             ( char * ) set_guc,
@@ -1964,7 +1967,14 @@ void set_session_gucs( struct worker * me, char * session_gucs )
         }
 
         PQclear( result );
-        _log( LOG_LEVEL_DEBUG, "Found session_guc kv pair: %s:%s", key, value );
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Found session_guc kv pair: %s:%s",
+            key,
+            value
+        );
+
         free( key );
 
         if( value != NULL )

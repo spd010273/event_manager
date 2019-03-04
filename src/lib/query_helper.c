@@ -1232,6 +1232,30 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
     return;
 }
 
+/*
+ * static struct json_kv * get_next_json_kv_pair(
+ *     char *,
+ *     char *,
+ *     bool *
+ * )
+ *
+ * Iterator for loops that parse JSON strings using JSMN. This abstracts the
+ * object / array lookahead and keeps the main logic nice and tidy.
+ *
+ * Arguments:
+ *     char * json_string: The JSON string being parsed
+ *     char * key_prefix:  An optional string to prefix keys with in
+ *                         regular expression replacement operations
+ *     bool * error:       Error flag thrown on parsing or memory
+ *                         allocation errors
+ *
+ * Return:
+ *     struct json_kv * result: The next key-value pair in the json string
+ *
+ * Error Conditions:
+ *     Will set the error flag and throw a warning on JSON parse error or
+ *     failure to allocate memory
+ */
 static struct json_kv * get_next_json_kv_pair(
     char * json_string,
     char * key_prefix,
@@ -1425,6 +1449,41 @@ static struct json_kv * get_next_json_kv_pair(
     return result;
 }
 
+/*
+ * static struct json_kv * new_kv_pair(
+ *    char *         json_string,
+ *    jsmntok_t *    json_key_token,
+ *    jsmntok_t *    json_value_token,
+ *    jsmntok_t *    json_tokens,
+ *    char *         key_prefix,
+ *    bool *         error,
+ *    unsigned int * i,
+ *    unsigned int * max_tokens
+ * )
+ *
+ * Struct allocator to JSON key-value pairs. Keeps track of the iterator's
+ * internal state as well as information about the string being parsed
+ *
+ * Arguments:
+ *    char * json_string:           JSON string being parsed
+ *    jsmntok_t * json_key_token:   Pointer to the JSON key token
+ *    jsmntok_t * json_value_token: Pointer to the JSON value token
+ *    jsmntok_t * json_tokens:      Array of json tokens.      
+ *    char * key_prefix:            Used to prefix keys during regex
+ *                                  substitution
+ *    bool * error:                 Error flag set on parse error or memory 
+ *                                  allocation error.
+ *    unsigned int * i:             Internal iterator
+ *    unsigned int * max_tokens:    Number of parsed tokens from the json
+ *                                  string
+ *
+ * Return:
+ *    struct json_kv * json_pair:   The newly allocated JSON key-value pair
+ *
+ * Error Conditions:
+ *    Raises error flag and throws error on JSON parse error or failure to
+ *    allocate memory.
+ */
 static struct json_kv * new_kv_pair(
     char *         json_string,
     jsmntok_t *    json_key_token,
@@ -1519,7 +1578,11 @@ static struct json_kv * new_kv_pair(
       )
     {
         end_index = json_value_token->end;
-        _log( LOG_LEVEL_DEBUG, "I'm in a nested struct, my end index is %d", end_index );
+        _log(
+            LOG_LEVEL_DEBUG,
+            "JSON Iterator: Performing nested struct lookahead to index %d",
+            end_index
+        );
         // i has already been inremented to point to the next token
         // (the token that follows json_value_token in json_tokens[])
         for( j = (*i); j < (*max_tokens); j++ )
@@ -1527,7 +1590,7 @@ static struct json_kv * new_kv_pair(
             temp_token = json_tokens[j];
             _log(
                 LOG_LEVEL_DEBUG,
-                "token T: %d, S: %d E: %d size: %d",
+                "JSON Iterator: token T: %d, S: %d E: %d size: %d",
                 temp_token.type,
                 temp_token.start,
                 temp_token.end,
@@ -1538,11 +1601,7 @@ static struct json_kv * new_kv_pair(
             {
                 (*i) = j;
                 found_st_end = true;
-                _log(
-                    LOG_LEVEL_DEBUG,
-                    "I've found the end of the JSON sub object / array @ index %d",
-                    temp_token.start
-                );
+
                 break;
             }
         }
@@ -1550,7 +1609,6 @@ static struct json_kv * new_kv_pair(
         if( !found_st_end )
         {
             (*i) = (*max_tokens);
-            _log( LOG_LEVEL_DEBUG, "I HAVE PUSHED THE STRING POINTER TO %d", *max_tokens );
         }
     }
 
@@ -1589,6 +1647,20 @@ static struct json_kv * new_kv_pair(
     return result;
 }
 
+/*
+ * static void _free_json_jv( struct json_kv * json_pair )
+ *
+ * Free the memory allocated for a JSON key-value pair.
+ *
+ * Arguments:
+ *     struct json_kv * json_pair: The key_value pair to be freed.
+ *
+ * Return:
+ *     None
+ *
+ * Error Conditions:
+ *     None
+ */
 static void _free_json_kv( struct json_kv * json_pair )
 {
     if( json_pair == NULL )

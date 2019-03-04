@@ -15,9 +15,9 @@
 
 #define VERSION 0.1
 
-struct worker ** workers     = NULL;
-struct worker *  parent      = NULL;
-char *           conninfo    = NULL;
+struct worker ** workers          = NULL;
+struct worker *  parent           = NULL;
+char *           conninfo         = NULL;
 bool             single_step_only = false;
 
 extern char ** envorion; // Declared in unistd.h
@@ -156,8 +156,8 @@ void _parse_args( int argc, char ** argv )
     {
         _log(
             LOG_LEVEL_WARNING,
-            "Forcing process counts to 1, it's suggested to run a single copy of"\
-            "each queue processor while in single step mode"
+            "Forcing process counts to 1, it's suggested to run a single copy"\
+            " of each queue processor while in single step mode"
         );
 
         if( work_jobs > 1 )
@@ -485,14 +485,16 @@ struct worker * new_worker(
         if( workers == NULL )
         {
             size = ( work_jobs + event_jobs ) * sizeof( struct worker * );
-            _log( LOG_LEVEL_DEBUG, "Creating SHM with size %lu: WJ %d, EJ: %d", size, work_jobs, event_jobs );
-            workers = ( struct worker ** ) create_shared_memory( size );
-            /*
-            workers = ( struct worker ** ) calloc(
-                work_jobs + event_jobs,
-                sizeof( struct worker * )
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Creating SHM with size %lu: WJ %d, EJ: %d",
+                size,
+                work_jobs,
+                event_jobs
             );
-            */
+
+            workers = ( struct worker ** ) create_shared_memory( size );
+
             if( workers == NULL )
             {
                 _log(
@@ -547,6 +549,7 @@ struct worker * new_worker(
             ( ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR ) ? WORKER_TITLE_EVENT_PROCESSOR : WORKER_TITLE_WORK_PROCESSOR,
             &max_argv_size
         );
+
         signal( SIGHUP, __sighup );
         signal( SIGTERM, __sigterm );
         signal( SIGINT, __sigint );
@@ -739,10 +742,47 @@ void __sigterm( int sig )
  */
 void __sighup( int sig )
 {
-    // TODO: reload config?
+    struct worker * me = NULL;
+
     got_sighup = true;
+    me         = get_worker_by_pid();
+
+    if( me == NULL )
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Could not handle sighup, got null pid slice"
+        );
+        return;
+    }
+
+    me->status = STATUS_RELOAD;
+
+    _log(
+        LOG_LEVEL_INFO,
+        "Pid %u got SIGHUP, reloading config",
+        ( unsigned int ) getpid()
+    );
+
+    if( me->tx_in_progress )
+    {
+        _rollback_transaction( me );
+    }
+
+    /*
+     *  Note: some connection poolers *cough* pgbouncer, pgpool will cache
+     *  GUC values. We will force a reconnect (and hopefully open up a new pool
+     *  in the process such that we get the latest value of our GUCs for tasks
+     *  such as get_uid / set_uid and REST calls
+     */
+    PQfinish( me->conn );
+    me->conn           = NULL;
+    me->tx_in_progress = false;
+
     signal ( sig, __sighup );
+
     got_sighup = false;
+    me->status = STATUS_WORKING;
     return;
 }
 
@@ -974,7 +1014,7 @@ void * create_shared_memory( size_t size )
  *     - Emits error when a child is found dead
  *     - Emits error when a child cannot be restarted
  */
-void _manage_children( void (*function)( void * ), int argc, char ** argv )
+void _manage_children( void (*function)( void * ) )
 {
     struct worker * worker   = NULL;
     unsigned short  type     = 0;
@@ -1055,7 +1095,7 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
                             __term();
                         }
 
-                        worker = new_worker( type, tid, function, argc, argv, worker );
+                        worker = new_worker( type, tid, function, parent->my_argc, parent->my_argv, worker );
 
                         if( worker == NULL )
                         {
@@ -1122,7 +1162,38 @@ void _manage_children( void (*function)( void * ), int argc, char ** argv )
     __term();
 }
 
-void _set_process_title( char ** argv, int argc, char * title, unsigned int * max_size )
+/*
+ *  void _set_process_title(
+ *      char **        argv,
+ *      int            argc,
+ *      char *         title,
+ *      unsigned int * max_size
+ *  )
+ *
+ *  Set the title of the invoking process. Uses the parent process to determine
+ *  the size of the argv array and store in max_size pointer such that later
+ *  invokers do not overflow the bounds of argv[]
+ *
+ *  Arguments:
+ *      char ** argv: Pointer to the argument array
+ *      int     argc: Number of arguments in the argv array
+ *      char *  title: The name of the process, will be written to argv[0]
+ *      unsigned int * max_size: set when the parent calls this routine, used
+ *                               to determine the bounds of the write for later
+ *                               callers.
+ *
+ *  Return:
+ *      None
+ *
+ *  Error Conditions:
+ *      Throws an error when the process title is null or argv is null
+ */
+void _set_process_title(
+    char **        argv,
+    int            argc,
+    char *         title,
+    unsigned int * max_size
+)
 {
     unsigned int i    = 0;
     unsigned int size = 0;
@@ -1169,7 +1240,6 @@ void _set_process_title( char ** argv, int argc, char * title, unsigned int * ma
             size
         );
 
-        //memset( argv[0], '\0', size );
         *max_size = size;
     }
 

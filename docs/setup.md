@@ -30,14 +30,14 @@ sudo make install
 
 ## Debian / Ubuntu
 
-Todo
+apt-get update
+apt-get install libcurl4-openssl-dev
 
 ## Windows
 No
 
 ## MacOS
 No
-
 
 # Extension Creation
 
