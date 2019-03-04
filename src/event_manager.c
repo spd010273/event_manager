@@ -317,6 +317,8 @@ void _queue_loop( struct worker * me )
 
 #ifdef BLOCKING_SELECT
         sigaddset( &signal_set, SIGTERM );
+        sigaddset( &signal_set, SIGINT );
+        sigaddset( &signal_set, SIGHUP );
 #endif
         sock = PQsocket( me->conn );
 
@@ -336,68 +338,71 @@ void _queue_loop( struct worker * me )
             sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 #endif
             _log(
-                LOG_LEVEL_FATAL,
+                LOG_LEVEL_WARNING,
                 "select() failed: %s",
                 strerror( errno )
             );
-
-            return;
         }
 #ifdef BLOCKING_SELECT
         sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 #endif
-
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Handling notify"
-        );
-
-        PQconsumeInput( me->conn );
-
-        while( ( notify = PQnotifies( me->conn ) ) != NULL )
+        // We will get dumped here on SIGHUP, and need to re-enter the
+        // _queue_loop function to re-establish all handles
+        if( me->conn != NULL )
         {
             _log(
                 LOG_LEVEL_DEBUG,
-                "ASYNCHRONOUS NOTIFY of '%s' received from "
-                "backend PID %d WITH payload '%s'",
-                notify->relname,
-                notify->be_pid,
-                notify->extra
+                "Handling notify"
             );
 
-            // Get queue item
-            PQfreemem( notify );
-            while( me->dequeue_function( me ) > 0 )
+            PQconsumeInput( me->conn );
+
+            while( ( notify = PQnotifies( me->conn ) ) != NULL )
             {
-                processed_count++;
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "ASYNCHRONOUS NOTIFY of '%s' received from "
+                    "backend PID %d WITH payload '%s'",
+                    notify->relname,
+                    notify->be_pid,
+                    notify->extra
+                );
+
+                // Get queue item
+                PQfreemem( notify );
+
+                while( me->dequeue_function( me ) > 0 )
+                {
+                    processed_count++;
+                }
+
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "Processed %d queue entries",
+                    processed_count
+                );
+
+                processed_count = 0;
             }
 
-            _log(
-                LOG_LEVEL_DEBUG,
-                "Processed %d queue entries",
-                processed_count
-            );
+            if( got_sigterm )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Exiting after receiving SIGTERM"
+                );
+                break;
+            }
 
-            processed_count = 0;
-        }
+            if( single_step_only )
+            {
+                _log(
+                    LOG_LEVEL_INFO,
+                    "exiting after single stepping..."
+                );
 
-        if( got_sigterm )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Exiting after receiving SIGTERM"
-            );
-            break;
-        }
-
-        if( single_step_only )
-        {
-            _log(
-                LOG_LEVEL_INFO,
-                "exiting after single stepping..."
-            );
-
-            break;
+                break;
+            }
         }
     }
 
@@ -2249,7 +2254,23 @@ void _queue_loop_wrapper( void * data )
     _set_application_name( me );
     // Start main loop
     me->status = STATUS_WORKING;
-    _queue_loop( me );
+    while( 1 )
+    {
+        _queue_loop( me );
+        _log(
+            LOG_LEVEL_WARNING,
+            "Child escaped from main loop"
+        );
+
+        if( single_step_only )
+        {
+            break;
+        }
+
+        // Rebound from SIGHUPs, as that may interrupt the select() in
+        // _queue_loop, which will dump us out here. Instead of calling
+        // queue_loop recursively, we let it back out and call from here
+    }
 
     // We should not get here but ehh
     me->status = STATUS_DEAD;

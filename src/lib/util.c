@@ -742,10 +742,11 @@ void __sigterm( int sig )
  */
 void __sighup( int sig )
 {
-    struct worker * me = NULL;
-
-    got_sighup = true;
-    me         = get_worker_by_pid();
+    struct worker * me      = NULL;
+    unsigned int    i       = 0;
+    bool            all_ack = false;
+    int             wstatus = 0;
+    me = get_worker_by_pid();
 
     if( me == NULL )
     {
@@ -756,6 +757,91 @@ void __sighup( int sig )
         return;
     }
 
+    if( me->type == WORKER_TYPE_PARENT )
+    {
+        _log(
+            LOG_LEVEL_INFO,
+            "Parent received reload command (SIGHUP)"
+        );
+
+        got_sighup = true;
+        // spread sighup to all workers so they can join the party
+        for( i = 0; i < ( work_jobs + event_jobs ); i++ )
+        {
+            if( workers[i] != NULL )
+            {
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "PID table slice prior to sighup:"
+                );
+                _debug_worker_slot( workers[i] );
+                kill( workers[i]->pid, SIGHUP );
+            }
+            else
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Acking SIGHUP: tid slot %u is empty!",
+                    i
+                );
+            }
+        }
+
+        // Verify that all children have acked the sighup
+        // and re-entered the working state
+        while( all_ack == false )
+        {
+            sleep( 1 );
+            all_ack = true;
+
+            for( i = 0; i < ( work_jobs + event_jobs ); i++ )
+            {
+                if( workers[i] != NULL )
+                {
+                    if( workers[i]->status != STATUS_WORKING )
+                    {
+                        all_ack = false;
+                        _log(
+                            LOG_LEVEL_DEBUG,
+                            "The following worker has failed to re-enter working state following SIGHUP"
+                         );
+                         _debug_worker_slot( workers[i] );
+                         waitpid( workers[i]->pid, &wstatus, WNOHANG );
+
+                         if( WIFSIGNALED( wstatus ) )
+                         {
+                             _log(
+                                 LOG_LEVEL_DEBUG,
+                                 "FYI worker exited with status %d",
+                                 WTERMSIG( wstatus )
+                             );
+                         }
+                    }
+                }
+                else
+                {
+                    _log(
+                        LOG_LEVEL_WARNING,
+                        "Worker check post SIGHUP: tid slot %u is empty!",
+                        i
+                    );
+                }
+            }
+
+            if( all_ack == false )
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Not all workers have ACK'd the SIGUP"
+                );
+            }
+        }
+
+        got_sighup = false;
+        return;
+    }
+
+    // Worker section
     me->status = STATUS_RELOAD;
 
     _log(
@@ -781,8 +867,12 @@ void __sighup( int sig )
 
     signal ( sig, __sighup );
 
-    got_sighup = false;
     me->status = STATUS_WORKING;
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Child reset status to working"
+    );
+
     return;
 }
 
@@ -1246,5 +1336,43 @@ void _set_process_title(
     size = *max_size;
     memset( argv[0], '\0', size );
     strncpy( argv[0], title, strlen( title ) );
+    return;
+}
+
+void _debug_worker_slot( struct worker * worker )
+{
+    if( worker == NULL )
+    {
+        return;
+    }
+
+    _log(
+        LOG_LEVEL_DEBUG,
+        "\nWorker struct %p\n"\
+        "dequeue_function: %p,\n"\
+        "channel: %s,\n"\
+        "connection handle: %p,\n"\
+        "curl handle: %p,\n"\
+        "pid: %d,\n"\
+        "type: %s,\n"\
+        "tx_in_progress: %s,\n"\
+        "curl enabled: %s,\n"\
+        "status: %s,\n"\
+        "ARGC: %d,\n"\
+        "ARGV: %p,\n",
+        worker,
+        worker->dequeue_function,
+        worker->channel,
+        worker->conn,
+        worker->curl_handle,
+        (int) worker->pid,
+        worker->type == WORKER_TYPE_PARENT ? "PARENT" : worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" : "WORK",
+        worker->tx_in_progress == true ? "YES" : "NO",
+        worker->enable_curl == true ? "YES" : "NO",
+        worker->status == STATUS_DEAD ? "DEAD" : worker->status == STATUS_STARTUP ? "STARTUP" : worker->status == STATUS_WORKING ? "WORKING" : "RELOAD",
+        worker->my_argc,
+        worker->my_argv
+    );
+
     return;
 }

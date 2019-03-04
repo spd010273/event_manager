@@ -36,9 +36,9 @@
 #define LOG_LEVEL_DEBUG "DEBUG"
 #define LOG_LEVEL_INFO "INFO"
 
-#define STATUS_DEAD 0
-#define STATUS_STARTUP 1
-#define STATUS_WORKING 2
+#define STATUS_DEAD 1
+#define STATUS_STARTUP 2
+#define STATUS_WORKING 3
 #define STATUS_RELOAD 4
 
 #define ALLOW_WORKER_RESTART true
@@ -114,4 +114,6 @@ bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
 
 void _set_process_title( char **, int, char *, unsigned int * );
+
+void _debug_worker_slot( struct worker * );
 #endif // UTIL_H
