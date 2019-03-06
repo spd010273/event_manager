@@ -27,11 +27,11 @@ git submodule update
 make
 sudo make install
 ```
-
+Additionally, you can run the install script in the event_manager repo. This will initialize the submodule as well as install event_manager under systemd. Event manager logs to /var/log/event_manager/event_manager.log when in daemon mode (-D argument)
 ## Debian / Ubuntu
 
 apt-get update
-apt-get install libcurl4-openssl-dev
+apt-get install libcurl4-openssl-dev git gcc make
 
 ## Windows
 No
