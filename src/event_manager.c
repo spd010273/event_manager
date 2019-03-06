@@ -47,9 +47,13 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
     int        retry_counter               = 0;
     int        last_backoff_time           = 0;
     char *     last_sql_state              = NULL;
-#ifdef DEBUG
+    char *     temp_last_sql_state         = NULL;
     int        i = 0;
-#endif
+
+    if( me == NULL )
+    {
+        return NULL;
+    }
 
     if( me->conn == NULL )
     {
@@ -65,7 +69,6 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         me->conn = PQconnectdb( conninfo );
     }
 
-#ifdef DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Executing query: '%s':",
@@ -80,7 +83,6 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
             _log( LOG_LEVEL_DEBUG, "%d (bindpoint $%d): %s", i, i+1, params[i] );
         }
     }
-#endif
 
     // Attempt to execute the query on our handle
     while(
@@ -176,10 +178,11 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         }
 
         if(
-            !(
-                PQresultStatus( result ) == PGRES_COMMAND_OK ||
-                PQresultStatus( result ) == PGRES_TUPLES_OK
-            )
+               result != NULL
+            && !(
+                     PQresultStatus( result ) == PGRES_COMMAND_OK
+                  || PQresultStatus( result ) == PGRES_TUPLES_OK
+                )
           )
         {
             _log(
@@ -189,7 +192,25 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
                 PQerrorMessage( me->conn )
             );
 
-            last_sql_state = PQresultErrorField( result, PG_DIAG_SQLSTATE );
+            temp_last_sql_state = PQresultErrorField(
+                result,
+                PG_DIAG_SQLSTATE
+            );
+
+            last_sql_state = ( char * ) calloc(
+                sizeof( char ),
+                strlen( temp_last_sql_state ) + 1
+            );
+
+            if( last_sql_state == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Failed to allocate string for SQL state"
+                );
+            }
+
+            strcpy( last_sql_state, temp_last_sql_state );
 
             if( result != NULL )
             {
@@ -204,11 +225,42 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         }
     }
 
-    _log(
-        LOG_LEVEL_ERROR,
-        "Query failed after %i tries.",
-        retry_counter
-    );
+    if(
+           retry_counter == 1
+        && last_sql_state != NULL
+        && (
+                 strcmp(
+                     last_sql_state,
+                     SQL_STATE_TERMINATED_BY_ADMINISTRATOR
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_CANCELED_BY_ADMINISTRATOR
+                 ) == 0
+           )
+      )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Query failed with state %s",
+            last_sql_state
+        );
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Query failed after %d tries with final state %s",
+            retry_counter,
+            last_sql_state
+        );
+    }
+
+    if( last_sql_state != NULL )
+    {
+        free( last_sql_state );
+        last_sql_state = NULL;
+    }
 
     return NULL;
 }
@@ -1677,7 +1729,7 @@ int main( int argc, char ** argv )
     {
         _log(
             LOG_LEVEL_FATAL,
-            "Could not allocate parent process memory"
+            "Failed to initialize event_manager"
         );
     }
 

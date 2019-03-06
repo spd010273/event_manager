@@ -34,6 +34,7 @@ Readonly my $LOG_DIR             => '/var/log/event_manager/';
 Readonly my $LOG_FILE            => 'event_manager.log';
 Readonly my $START_FILE_NAME     => 'event_manager-startup.sh';
 Readonly my $STOP_FILE_NAME      => 'event_manager-shutdown.sh';
+Readonly my $RELOAD_FILE_NAME    => 'event_manager-reload.sh';
 Readonly my $SH_TARGET_DIR       => '/usr/bin/';
 Readonly my $SYSTEMD_SERVICE_DIR => '/usr/lib/systemd/system/';
 Readonly my $GIT_INIT_COMMAND    => 'git submodule update --init --recursive';
@@ -42,14 +43,36 @@ Readonly my $START_SH => <<BASH;
 #!/bin/bash
 #    This script will start the Event Manager daemons
 
-__INSTALL_DIR__/event_manager -U __USERNAME__ -d __DBNAME__ -h __HOSTNAME__ -p __PORT__ -W __WORKER_COUNT__ -E __EVENT_COUNT__ &> ${LOG_DIR}${LOG_FILE} & 
+__INSTALL_DIR__/event_manager -U __USERNAME__ -d __DBNAME__ -h __HOSTNAME__ -p __PORT__ -W __WORKER_COUNT__ -E __EVENT_COUNT__ -D
 BASH
 
 Readonly my $STOP_SH => <<BASH;
 #!/bin/bash
 #    This script will stop the event_manager daemons
+if [ -f /var/run/event_manager.pid ]; then
+    kill \$(cat /var/run/event_manager.pid)
+elif [ -f ~/event_manager.pid ]; then
+    kill \$(cat ~/event_manager.pid)
+elif [ -f ./event_manager.pid ]; then
+    kill \$(cat ./event_manager.pid)
+else
+    echo "Could not locate PID file!"
+fi
 
-killall event_manager
+BASH
+
+Readonly my $RELOAD_SH => <<BASH;
+#!/bin/bash
+#   This script will issue a SIGHUP to event_manager
+if [ -f /var/run/event_manager.pid ]; then
+    kill -1 \$(cat /var/run/event_manager.pid)
+elif [ -f ~/event_manager.pid ]; then
+    kill -1 \$(cat ~/event_manager.pid)
+elif [ -f ./event_manager.pid ]; then
+    kill -1 \$(cat ./event_manager.pid)
+else
+    echo "Could not locate PID file!"
+fi
 BASH
 
 my $hostname;
@@ -81,7 +104,7 @@ sub build_repo()
     #  - Check for lib prerequisites
 
     system( 'make clean' );
-    system( 'make' ); 
+    system( 'make' );
     system( 'make install' );
 
     return;
@@ -177,7 +200,7 @@ sub get_worker_count()
     {
         $worker_count = 1;
     }
-    
+
     if(
             defined $worker_count
         and length( $worker_count ) > 0
@@ -203,7 +226,7 @@ sub get_event_count()
     {
         $event_count = 1;
     }
-    
+
     if(
             defined $event_count
         and length( $event_count ) > 0
@@ -331,6 +354,24 @@ $start_shell_script    =~ s/__PORT__/$port/g;
 $start_shell_script    =~ s/__WORKER_COUNT__/$worker_count/g;
 $start_shell_script    =~ s/__EVENT_COUNT__/$event_count/g;
 
+my $stop_shell_script  = $STOP_SH;
+$stop_shell_script     =~ s/__INSTALL_DIR__/$install_dir/g;
+$stop_shell_script     =~ s/__USERNAME__/$username/g;
+$stop_shell_script     =~ s/__DBNAME__/$dbname/g;
+$stop_shell_script     =~ s/__HOSTNAME__/$hostname/g;
+$stop_shell_script     =~ s/__PORT__/$port/g;
+$stop_shell_script     =~ s/__WORKER_COUNT__/$worker_count/g;
+$stop_shell_script     =~ s/__EVENT_COUNT__/$event_count/g;
+
+my $reload_shell_script = $RELOAD_SH;
+$reload_shell_script    =~ s/__INSTALL_DIR__/$install_dir/g;
+$reload_shell_script    =~ s/__USERNAME__/$username/g;
+$reload_shell_script    =~ s/__DBNAME__/$dbname/g;
+$reload_shell_script    =~ s/__HOSTNAME__/$hostname/g;
+$reload_shell_script    =~ s/__PORT__/$port/g;
+$reload_shell_script    =~ s/__WORKER_COUNT__/$worker_count/g;
+$reload_shell_script    =~ s/__EVENT_COUNT__/$event_count/g;
+
 unless( open( STARTFILE, ">${SH_TARGET_DIR}${START_FILE_NAME}" ) )
 {
     croak "Failed to write to ${SH_TARGET_DIR} for systemd startup script";
@@ -345,11 +386,24 @@ unless( open( STOPFILE, ">${SH_TARGET_DIR}${STOP_FILE_NAME}" ) )
     croak "Failed to write to ${SH_TARGET_DIR} for systemd shutdown script";
 }
 
-print STOPFILE $STOP_SH;
+print STOPFILE $stop_shell_script;
 close STOPFILE;
 chmod "0755", "${SH_TARGET_DIR}${STOP_FILE_NAME}";
 
-if( -e "${SH_TARGET_DIR}${START_FILE_NAME}" and -e "${SH_TARGET_DIR}${STOP_FILE_NAME}" )
+unless( open( RELOADFILE, ">${SH_TARGET_DIR}${RELOAD_FILE_NAME}" ) )
+{
+    croak "Failed to write to ${SH_TARGET_DIR} for systemd reload script";
+}
+
+print RELOADFILE $reload_shell_script;
+close RELOADFILE;
+chmod "0755", "${SH_TARGET_DIR}${RELOAD_FILE_NAME}";
+
+if(
+        -e "${SH_TARGET_DIR}${START_FILE_NAME}"
+    and -e "${SH_TARGET_DIR}${STOP_FILE_NAME}"
+    and -e "${SH_TARGET_DIR}${RELOAD_FILE_NAME}"
+  )
 {
     print "Copied start/stop scripts to ${SH_TARGET_DIR}\n";
 }
@@ -363,9 +417,9 @@ unless( -e $SYSTEMD_SERVICE_DIR )
     croak 'Is systemd installed??';
 }
 
-unless( copy( "${install_dir}/service/event_manager.service", $SYSTEMD_SERVICE_DIR ) )
+unless( copy( "${install_dir}/service/templates/event_manager.service", $SYSTEMD_SERVICE_DIR ) )
 {
-    print "source dir is ${install_dir}/service/event_manager.service\n";
+    print "source dir is ${install_dir}/service/templates/event_manager.service\n";
     croak "Failed to copy file to $SYSTEMD_SERVICE_DIR: $OS_ERROR";
 }
 
@@ -376,5 +430,6 @@ if( $result )
     croak "Service installation failed";
 }
 
+system( 'systemctl daemon-reload' );
 system( 'systemctl enable event_manager.service' );
 exit 0;

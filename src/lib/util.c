@@ -19,6 +19,8 @@ struct worker ** workers          = NULL;
 struct worker *  parent           = NULL;
 char *           conninfo         = NULL;
 bool             single_step_only = false;
+bool             daemonize        = false;
+FILE *           log_file         = NULL;
 
 extern char ** envorion; // Declared in unistd.h
 
@@ -39,7 +41,7 @@ Usage: event_manager\n \
     -d DB name (default: DB User)\n \
     -E worker_count: Number of Event Queue workers to spawn\n \
     -W worker_count: Number of Work Queue workers to spawn\n \
-  [ -D debug mode\n \
+  [ -D daemonize\n \
     -S single step\n \
     -v VERSION\n \
     -? HELP ]\n";
@@ -70,7 +72,7 @@ void _parse_args( int argc, char ** argv )
 
     opterr = 0;
 
-    while( ( c = getopt( argc, argv, "U:p:d:h:E:W:Sv?" ) ) != -1 )
+    while( ( c = getopt( argc, argv, "U:p:d:h:E:W:Sv?D" ) ) != -1 )
     {
         switch( c )
         {
@@ -101,6 +103,9 @@ void _parse_args( int argc, char ** argv )
                 break;
             case 'S':
                 single_step_only = true;
+                break;
+            case 'D':
+                daemonize = true;
                 break;
             default:
                 _usage( "Invalid argument." );
@@ -265,28 +270,48 @@ void _usage( char * message )
  */
 void _log( char * log_level, char * message, ... )
 {
-    va_list args = {{0}};
-    FILE *  output_handle = NULL;
+    va_list         args          = {{0}};
+    FILE *          output_handle = NULL;
 
     if( message == NULL )
     {
         return;
     }
 
-    va_start( args, message );
+    // Setup logfile iff we're daemonizing and the parent's worker slot has
+    // been inited
+    if( daemonize )
+    {
+        if( log_file != NULL )
+        {
+            output_handle = log_file;
+        }
+        else
+        {
+            fprintf(
+                stderr,
+                "we're daemonized but the log file is not inited :("
+            );
+        }
+    }
 
     if(
-        strcmp( log_level, LOG_LEVEL_WARNING ) == 0 ||
-        strcmp( log_level, LOG_LEVEL_ERROR ) == 0 ||
-        strcmp( log_level, LOG_LEVEL_FATAL ) == 0
+           output_handle == NULL
+        && (
+                strcmp( log_level, LOG_LEVEL_WARNING ) == 0
+             || strcmp( log_level, LOG_LEVEL_ERROR )   == 0
+             || strcmp( log_level, LOG_LEVEL_FATAL )   == 0
+           )
       )
     {
         output_handle = stderr;
     }
-    else
+    else if( output_handle == NULL )
     {
         output_handle = stdout;
     }
+
+    va_start( args, message );
 
 #ifndef DEBUG
     if( strcmp( log_level, LOG_LEVEL_DEBUG ) != 0 )
@@ -373,7 +398,8 @@ void free_worker( struct worker * worker )
 
 /*
  *  bool parent_init( void )
- *      Initial special (initial) call to new_worker for parent process
+ *      Initial special (initial) call to new_worker for parent process,
+ *      Then drop PID file for systemctl to read
  *
  *   Arguments:
  *      None
@@ -384,12 +410,202 @@ void free_worker( struct worker * worker )
  */
 bool parent_init( int argc, char ** argv )
 {
+    DIR *           dir           = NULL;
+    FILE *          pfh           = NULL;
+    char *          pid_path      = NULL;
+    char *          my_pid        = NULL;
+    char *          pid_file      = "event_manager.pid";
+    struct stat     statbuffer    = {0};
+    unsigned int    string_offset = 0;
+    unsigned int    total_size    = 0;
+    char            path[PATH_MAX] = {0};
+    struct passwd * pw            = NULL;
+
+    // Do we need to daemonize?
+    if( daemonize )
+    {
+        // daemonize with nochdir != 0 and noclose == 0
+        if( daemon( 1, 1 ) != 0 )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Daemonization failed"
+            );
+
+            return false;
+        }
+
+        log_file = fopen( LOG_FILE_NAME, "w" );
+
+        if( log_file == NULL )
+        {
+            return false;
+        }
+    }
+
+    // Create parent struct
     parent = new_worker( WORKER_TYPE_PARENT, 0, NULL, argc, argv, NULL );
 
     if( parent == NULL )
     {
         return false;
     }
+
+    // Find where we should place PID file
+    //     /var/run/<file>
+    //     ~/<file>
+    //     cwd/<file>
+    //     cry    
+    
+    dir = opendir( "/var/run" );
+
+    if( dir != NULL )
+    {
+        closedir( dir );
+        pfh = fopen( "/var/run/__test.pid", "w" );
+    
+        // Jankily test that we can actually write to this dir    
+        if( pfh != NULL )
+        {
+            fclose( pfh );
+            remove( "/var/run/__test.pid" );
+        
+            pfh = NULL;
+            strncpy( path, "/var/run", 8 );
+        }
+    }
+
+    // See if above failed
+    if( strlen( path ) == 0 )
+    {
+        // either /var/run doesn't exist (!!!) or we cannot write to it,
+        // get homedir
+        if( getenv("HOME") != NULL )
+        {
+            strncpy( path, getenv( "HOME" ), sizeof( path ) );
+        }
+        
+        if( strlen( path ) == 0 )
+        {
+            pw = getpwuid( geteuid() );
+
+            if( pw == NULL )
+            {
+                // Give up and get CWD
+                if( getcwd( path, sizeof( path ) ) == NULL )
+                {
+                    // Really give up
+                    _log(
+                        LOG_LEVEL_ERROR,
+                        "Failed to determine where to place PID file"
+                    );
+
+                    return false;
+                }
+            }
+            else
+            {
+                strncpy( path, pw->pw_dir, sizeof( path ) );
+            }
+        }
+    }
+
+    if( path[strlen(path) - 1] != '/' )
+    {
+        string_offset = 1;
+    }
+
+    total_size = strlen( path )
+               + strlen( pid_file )
+               + string_offset + 1;
+
+    // Valgrind will complain about a leak here - we copy the pointer and
+    // free it when the parent exits :|
+    pid_path = ( char * ) calloc(
+        sizeof( char ),
+        total_size
+    );
+
+    if( pid_path == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for PID file path :("
+        );
+
+        return false;
+    }
+
+    strncpy( pid_path, path, strlen( path ) );
+
+    if( string_offset == 1 )
+    {
+        strncat( pid_path, "/", 1 );
+    }
+
+    strncat( pid_path, pid_file, strlen( pid_file ) );
+    pid_path[total_size - 1] = '\0';
+
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Opening pid file at %s",
+        pid_path
+    );
+
+    // Does our PID file exist (we're already running)
+    if( stat( pid_path, &statbuffer ) >= 0 )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "PID file %s already exists, is event_manager already running?",
+            pid_path
+        );
+        free( pid_path );
+        return false;
+    }
+
+    // Include space for \n\0 at the end of the string
+    total_size = ( unsigned int ) ceil( log10( (int) getpid() ) + 3 );
+
+    my_pid = ( char * ) calloc(
+        sizeof( char ),
+        total_size
+    );
+
+    if( my_pid == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to allocate memory for PID string"
+        );
+
+        free( pid_path );
+        return false;
+    }
+
+    snprintf( my_pid, total_size, "%d\n", ( int ) getpid()  );
+
+    _log( LOG_LEVEL_DEBUG, "my_pid: %s", my_pid );
+    pfh = fopen( pid_path, "w" );
+
+    if( pfh == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to open file '%s' for writing",
+            pid_path
+        );
+
+        free( pid_path );
+        free( my_pid );
+        return false;
+    }
+
+
+    fprintf( pfh, "%s", my_pid );
+    parent->pidfile = pid_path;
+    fclose( pfh );
+    free( my_pid );
 
     return true;
 }
@@ -521,6 +737,7 @@ struct worker * new_worker(
         return result;
     }
 
+    // prep to copy FH
     _log( LOG_LEVEL_DEBUG, "Remapped PID table slot %u to %p", id, result );
     workers[id] = result;
 
@@ -535,8 +752,8 @@ struct worker * new_worker(
 
         if( data != NULL )
         {
-            ( ( struct worker * ) data )->my_argc = argc;
-            ( ( struct worker * ) data )->my_argv = argv;
+            ( ( struct worker * ) data )->my_argc  = argc;
+            ( ( struct worker * ) data )->my_argv  = argv;
         }
 
         _log( LOG_LEVEL_DEBUG, "child argv: %p argc: %d", argv, argc );
@@ -546,7 +763,8 @@ struct worker * new_worker(
         _set_process_title(
             argv,
             argc,
-            ( ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR ) ? WORKER_TITLE_EVENT_PROCESSOR : WORKER_TITLE_WORK_PROCESSOR,
+            ( ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR )
+                ? WORKER_TITLE_EVENT_PROCESSOR : WORKER_TITLE_WORK_PROCESSOR,
             &max_argv_size
         );
 
@@ -910,8 +1128,9 @@ void __sigint( int sig )
  */
 void __term( void )
 {
-    struct worker * me = NULL;
-    unsigned int    i  = 0;
+    struct worker * me       = NULL;
+    unsigned int    i        = 0;
+    struct stat     filestat = {0};
 
     me = get_worker_by_pid();
 
@@ -982,8 +1201,33 @@ void __term( void )
         munmap( workers, sizeof( struct worker * ) * ( work_jobs + event_jobs ) );
         workers = NULL;
 
+        // Remove PID file prior to exit
+
         if( parent != NULL )
         {
+            if( parent->pidfile != NULL )
+            {
+                if( stat( parent->pidfile, &filestat ) >= 0 )
+                {
+                    if( remove( parent->pidfile ) != 0 )
+                    {
+                        _log(
+                            LOG_LEVEL_ERROR,
+                            "Failed to remove PID file '%s'",
+                            parent->pidfile
+                        );
+                    }
+                }
+
+                free( parent->pidfile );
+                parent->pidfile = NULL;
+            }
+
+            if( log_file != NULL )
+            {
+                fclose( log_file );
+            }
+
             free_worker( parent );
         }
     }
@@ -994,6 +1238,8 @@ void __term( void )
 /*
  * struct worker * get_worker_by_pid()
  *    Call getpid() and search the process table for the worker struct
+ *    NOTE: Calling _log from within this function will cause a stack
+ *    overflow
  *
  * Arguments:
  *     None
@@ -1005,26 +1251,21 @@ void __term( void )
  */
 struct worker * get_worker_by_pid()
 {
-    struct worker * me  = NULL;
-    unsigned int    i   = 0;
-    pid_t           pid = 0;
+    unsigned int i   = 0;
+    pid_t        pid = 0;
 
     pid = getpid();
 
-    if( parent != NULL )
+    // Check if we're the parent first
+    // NOTE: parent will be init'd for children due to the fork() call,
+    // so we compare using pid to verify
+    if( parent != NULL && pid == parent->pid )
     {
-        if( pid == parent->pid )
-        {
-            me = parent;
-        }
-    }
-    else
-    {
-        _log( LOG_LEVEL_DEBUG, "parent process entry is NULL" );
+        return parent;
     }
 
     // Search workers array
-    if( me == NULL && workers != NULL )
+    if( workers != NULL )
     {
         for( i = 0; i < ( event_jobs + work_jobs ); i++ )
         {
@@ -1032,19 +1273,13 @@ struct worker * get_worker_by_pid()
             {
                 if( workers[i]->pid == pid )
                 {
-                    me = workers[i];
-                    break;
+                    return workers[i];
                 }
             }
         }
     }
 
-    if( workers == NULL )
-    {
-        _log( LOG_LEVEL_DEBUG, "PID table is NULL" );
-    }
-
-    return me;
+    return NULL;
 }
 
 /*
@@ -1120,6 +1355,7 @@ void _manage_children( void (*function)( void * ) )
         sleep( 10 );
         alive = false;
         _log( LOG_LEVEL_DEBUG, "Parent entering maintenance loop" );
+
         for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
         {
             if( workers[tid] == NULL )
@@ -1133,8 +1369,9 @@ void _manage_children( void (*function)( void * ) )
             }
 
             worker = workers[tid];
-            type = worker->type;
-            pid  = worker->pid;
+            type   = worker->type;
+            pid    = worker->pid;
+
             waitpid( pid, &wstatus, WNOHANG );
 
             if( WIFSIGNALED( wstatus ) ) // Detect abnormal exit
@@ -1148,14 +1385,15 @@ void _manage_children( void (*function)( void * ) )
                     WTERMSIG( wstatus )
                 );
             }
-           
+
             wstatus = 0;
- 
+
             if( worker->status == STATUS_DEAD )
             {
                 _log(
-                    LOG_LEVEL_DEBUG,
-                    "Found dead worker (%s queue, pid %d), (sigt flag: %s) restarting...",
+                    LOG_LEVEL_WARNING,
+                    "Found dead worker (%s queue, pid %d),"\
+                    " (sigt flag: %s) restarting...",
                     type == WORKER_TYPE_EVENT_PROCESSOR ? "Event" : "Work",
                     pid,
                     got_sigterm ? "T" : "F"
@@ -1185,7 +1423,14 @@ void _manage_children( void (*function)( void * ) )
                             __term();
                         }
 
-                        worker = new_worker( type, tid, function, parent->my_argc, parent->my_argv, worker );
+                        worker = new_worker(
+                            type,
+                            tid,
+                            function,
+                            parent->my_argc,
+                            parent->my_argv,
+                            worker
+                        );
 
                         if( worker == NULL )
                         {
@@ -1211,24 +1456,25 @@ void _manage_children( void (*function)( void * ) )
                             {
                                 _log(
                                     LOG_LEVEL_ERROR,
-                                    "Worker pid %d failed to start, marking PID table entry as dead",
+                                    "Worker pid %d failed to start, "\
+                                    "marking PID table entry as dead",
                                     pid
                                 );
                             }
 
                             worker = NULL;
-                            pid = 0;
+                            pid    = 0;
                         }
 
                         workers[tid] = worker;
-                        alive = true;
+                        alive        = true;
                     }
                     else
                     {
-                        worker->pid = 0;
-                        worker->type = 0;
+                        worker->pid    = 0;
+                        worker->type   = 0;
                         worker->status = STATUS_DEAD;
-                        
+
                         if( munmap( worker, sizeof( struct worker ) ) != 0 )
                         {
                             _log(
@@ -1238,7 +1484,7 @@ void _manage_children( void (*function)( void * ) )
                         }
 
                         workers[tid] = NULL;
-                        worker = NULL;
+                        worker       = NULL;
                     }
                 }
             }
@@ -1359,19 +1605,24 @@ void _debug_worker_slot( struct worker * worker )
         "curl enabled: %s,\n"\
         "status: %s,\n"\
         "ARGC: %d,\n"\
-        "ARGV: %p,\n",
+        "ARGV: %p,\n"\
+        "pidfile: %s\n",
         worker,
         worker->dequeue_function,
         worker->channel,
         worker->conn,
         worker->curl_handle,
         (int) worker->pid,
-        worker->type == WORKER_TYPE_PARENT ? "PARENT" : worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" : "WORK",
+        worker->type == WORKER_TYPE_PARENT ? "PARENT" :
+            worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" : "WORK",
         worker->tx_in_progress == true ? "YES" : "NO",
         worker->enable_curl == true ? "YES" : "NO",
-        worker->status == STATUS_DEAD ? "DEAD" : worker->status == STATUS_STARTUP ? "STARTUP" : worker->status == STATUS_WORKING ? "WORKING" : "RELOAD",
+        worker->status == STATUS_DEAD ? "DEAD" :
+            worker->status == STATUS_STARTUP ? "STARTUP" :
+                worker->status == STATUS_WORKING ? "WORKING" : "RELOAD",
         worker->my_argc,
-        worker->my_argv
+        worker->my_argv,
+        worker->pidfile
     );
 
     return;

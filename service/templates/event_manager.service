@@ -1,7 +1,7 @@
 [Unit]
 Description=Event Manager
 Documentation=https://bitbucket.org/neadwerx/event_manager/src/master/
-After=network.target
+Wants=NetworkManager.service
 
 [Service]
 Type=oneshot
@@ -9,6 +9,11 @@ ExecStart=/usr/bin/event_manager-startup.sh
 RemainAfterExit=true
 ExecStop=/usr/bin/event_manager-shutdown.sh
 StandardOutput=journal
+ExecReload=/usr/bin/event_manager-reload.sh
+
+KillMode=process
+KillSignal=SIGTERM
+TimeoutSec=10s
 
 [Install]
 WantedBy=multi-user.target

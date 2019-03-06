@@ -14,6 +14,7 @@
 #ifndef UTIL_H
 #define UTIL_H
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,9 +27,13 @@
 #include <libpq-fe.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <errno.h>
 #include <limits.h>
 #include <sys/user.h>
+#include <pwd.h>
+#include <dirent.h>
 
 #define LOG_LEVEL_WARNING "WARNING"
 #define LOG_LEVEL_ERROR "ERROR"
@@ -53,10 +58,40 @@
 #define WORKER_TITLE_WORK_PROCESSOR "work queue processor"
 #define WORKER_TITLE_PARENT "Event Manager parent process"
 
+#define LOG_FILE_NAME "/var/log/event_manager/event_manager.log"
+
 /*
  *  Structure used to store worker initialization at fork time,
  *  as well as store worker specific handles
+ *
+ *  Notes on access patterns:
+ *      - Parent allocates worker slot
+ *      - Children write to the worker slot once init'd
+ *      - Parent only reads data from the worker slot
+ *      - Children will attempt to do their own cleanup if term'd (see __term)
+ *      - Parent will verify that worker slots are cleaned (see __term)
+ *
+ *  Signal flag rules:
+ *      SIGINT:
+ *          This is received by the parent as the children may be in a blocking
+ *          select() operation. The parent sets the got_sigint flag ( so any
+ *          non-blocked children can clean up ), then enters the __term loop
+ *          where it will SIGTERM / SIGKILL child processes
+ *      SIGTERM:
+ *          Similar to above, the parent starts terminating processes once it
+ *          enters __term()
+ *      SIGHUP:
+ *          We're expecting the parent to receive this, in which case the
+ *          parent enters a short maintenance routing where it echos the
+ *          SIGHUP to all children and verifies that they've acked the HUP.
+ *          The children will rollback all transactions and terminate their
+ *          database handles, then re-enter their main loops causing them to
+ *          re-open their DB handles. The reconnect is required to be able to
+ *          read changes in GUC values when behind a connection pooler such as
+ *          pgbouncer of pgpool-II.
+ *
  */
+
 struct worker {
     int (*dequeue_function)( struct worker * );
     const char *   channel;
@@ -69,13 +104,16 @@ struct worker {
     unsigned short status;
     int            my_argc;
     char **        my_argv;
+    char *         pidfile; // used only by parent
 };
 
-unsigned int  event_jobs;
-unsigned int  work_jobs;
+unsigned int event_jobs;
+unsigned int work_jobs;
 
+bool daemonize;
 bool single_step_only;
 char * conninfo;
+FILE * log_File;
 
 sig_atomic_t got_sighup;
 sig_atomic_t got_sigterm;

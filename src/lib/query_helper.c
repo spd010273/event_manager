@@ -1468,10 +1468,10 @@ static struct json_kv * get_next_json_kv_pair(
  *    char * json_string:           JSON string being parsed
  *    jsmntok_t * json_key_token:   Pointer to the JSON key token
  *    jsmntok_t * json_value_token: Pointer to the JSON value token
- *    jsmntok_t * json_tokens:      Array of json tokens.      
+ *    jsmntok_t * json_tokens:      Array of json tokens.
  *    char * key_prefix:            Used to prefix keys during regex
  *                                  substitution
- *    bool * error:                 Error flag set on parse error or memory 
+ *    bool * error:                 Error flag set on parse error or memory
  *                                  allocation error.
  *    unsigned int * i:             Internal iterator
  *    unsigned int * max_tokens:    Number of parsed tokens from the json

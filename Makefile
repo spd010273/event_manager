@@ -3,7 +3,7 @@ PGLIBDIR     = $(shell pg_config --libdir)
 PGINCLUDEDIR = $(shell pg_config --includedir)
 CC           = gcc
 LIBS         = -lm -lpq -lcurl
-#DEBUG		 = -g -DDEBUG
+DEBUG		 = -g -DDEBUG
 PG_CPPFLAGS	 = -I./src/ -I./src/lib/ -I$(PGINCLUDEDIR) $(DEBUG) $(LIBS)
 
 event_manager: src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o
