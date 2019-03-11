@@ -34,6 +34,7 @@
 #include <sys/user.h>
 #include <pwd.h>
 #include <dirent.h>
+#include <time.h>
 
 #define LOG_LEVEL_WARNING "WARNING"
 #define LOG_LEVEL_ERROR "ERROR"
@@ -48,6 +49,7 @@
 
 #define ALLOW_WORKER_RESTART true
 #define MAX_WORKERS 16
+#define MAX_LOCK_WAIT 5 // Seconds
 
 // Worker Types
 #define WORKER_TYPE_EVENT_PROCESSOR 1
@@ -105,6 +107,19 @@ struct worker {
     int            my_argc;
     char **        my_argv;
     char *         pidfile; // used only by parent
+    time_t         tx_start;
+    unsigned int   tx_success;  // Number of successful tx since last update
+    unsigned int   tx_fail;     // Number of failed tx since last update
+    double         tx_duration; // Duration of all tx since last update, in seconds
+    bool           stat_update; // Semaphore for stat collector routine
+    time_t         last_heartbeat; // Workaround for systemd not reaping children
+};
+
+// for by-type rollup
+struct em_stat {
+    unsigned int tx_success;
+    unsigned int tx_fail;
+    double       tx_duration;
 };
 
 unsigned int event_jobs;
@@ -140,7 +155,7 @@ void free_worker( struct worker * worker );
 struct worker * get_worker_by_pid( void );
 bool parent_init( int, char ** );
 void * create_shared_memory( size_t );
-void _manage_children( void (*function)( void * ) ) __attribute__ ((noreturn));
+void _manage_children( void (*function)( void * ) );
 
 void __sigterm( int ) __attribute__ ((noreturn));
 void __sigint( int ) __attribute__ ((noreturn));
@@ -150,6 +165,18 @@ void __term( void ) __attribute__ ((noreturn));
 bool _rollback_transaction( struct worker * );
 bool _commit_transaction( struct worker * );
 bool _begin_transaction( struct worker * );
+
+void _gather_child_stats_to_self( struct em_stat ** );
+void _update_stats(
+    struct worker *,
+    unsigned int,
+    unsigned int,
+    double
+);
+
+// Mutex helpers
+bool _wait_and_set_mutex( struct worker * );
+bool __test_and_set( struct worker * );
 
 void _set_process_title( char **, int, char *, unsigned int * );
 

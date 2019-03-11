@@ -51,10 +51,13 @@ Readonly my $STOP_SH => <<BASH;
 #    This script will stop the event_manager daemons
 if [ -f /var/run/event_manager.pid ]; then
     kill \$(cat /var/run/event_manager.pid)
+    rm /var/run/event_manager.pid
 elif [ -f ~/event_manager.pid ]; then
     kill \$(cat ~/event_manager.pid)
+    rm ~/event_manager.pid
 elif [ -f ./event_manager.pid ]; then
     kill \$(cat ./event_manager.pid)
+    rm ./event_manager.pid
 else
     echo "Could not locate PID file!"
 fi
@@ -274,6 +277,7 @@ my $install_dir = getcwd();
 chdir( $dir );
 
 our( $opt_d, $opt_U, $opt_p, $opt_h, $opt_E, $opt_W );
+
 unless( getopts( 'd:U:p:h:E:W:' ) )
 {
     get_dbname();

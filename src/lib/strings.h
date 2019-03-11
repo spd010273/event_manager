@@ -145,4 +145,29 @@ static const char * clear_guc = "\
 
 static const char * set_application_name = "\
     SET application_name = '";
+
+static const char * test_stat_table = "\
+    SELECT c.relname \
+      FROM pg_class c \
+INNER JOIN pg_namespace n \
+        ON n.nspname = '" EXTENSION_NAME "' \
+       AND n.oid = c.relnamespace \
+     WHERE c.relkind = 'r' \
+       AND c.relname = 'tb_statistic'";
+
+static const char * insert_stat_rollup = "\
+    INSERT INTO " EXTENSION_NAME ".tb_statistic \
+                ( \
+                    tx_success, \
+                    tx_fail, \
+                    tx_duration, \
+                    type \
+                ) \
+         VALUES \
+                ( \
+                    $1::BIGINT, \
+                    $2::BIGINT, \
+                    $3::DOUBLE PRECISION, \
+                    $4::VARCHAR \
+                )";
 #endif

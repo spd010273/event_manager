@@ -29,7 +29,12 @@
 
 /* Constants */
 #define MAX_CONN_RETRIES 3
-#define API_CALL_TIMEOUT 300L
+#define API_CALL_TIMEOUT 300L // In seconds
+#define STAT_UPDATE_INTERVAL 60 // In seconds
+
+// In seconds, the longest time we can go without hearing from our parent process
+#define MAX_HEARTBEAT_DURATION 60
+
 // Channels
 #define EVENT_QUEUE_CHANNEL "new_event_queue_item"
 #define WORK_QUEUE_CHANNEL "new_work_queue_item"
@@ -81,6 +86,7 @@ static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
 PGresult * _execute_query( struct worker *, char *, char **, int );
+void _gather_and_update_stats( struct worker *, struct em_stat ** );
 char * get_column_value( int, PGresult *, char * );
 bool is_column_null( int, PGresult *, char * );
 bool _rollback_transaction( struct worker * );

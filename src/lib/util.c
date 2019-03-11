@@ -455,21 +455,21 @@ bool parent_init( int argc, char ** argv )
     //     /var/run/<file>
     //     ~/<file>
     //     cwd/<file>
-    //     cry    
-    
+    //     cry
+
     dir = opendir( "/var/run" );
 
     if( dir != NULL )
     {
         closedir( dir );
         pfh = fopen( "/var/run/__test.pid", "w" );
-    
-        // Jankily test that we can actually write to this dir    
+
+        // Jankily test that we can actually write to this dir
         if( pfh != NULL )
         {
             fclose( pfh );
             remove( "/var/run/__test.pid" );
-        
+
             pfh = NULL;
             strncpy( path, "/var/run", 8 );
         }
@@ -484,7 +484,7 @@ bool parent_init( int argc, char ** argv )
         {
             strncpy( path, getenv( "HOME" ), sizeof( path ) );
         }
-        
+
         if( strlen( path ) == 0 )
         {
             pw = getpwuid( geteuid() );
@@ -677,6 +677,11 @@ struct worker * new_worker(
     result->conn           = NULL;
     result->curl_handle    = NULL;
     result->status         = STATUS_STARTUP;
+    result->tx_start       = 0;
+    result->tx_success     = 0;
+    result->tx_fail        = 0;
+    result->tx_duration    = 0.0;
+    result->last_heartbeat = time( NULL );
 
     if(
             type != WORKER_TYPE_PARENT
@@ -787,12 +792,174 @@ struct worker * new_worker(
     return result;
 }
 
+void  _gather_child_stats_to_self( struct em_stat ** stats )
+{
+    struct worker *  me = NULL;
+    unsigned int     i  = 0;
+    struct em_stat * w  = NULL;
+    struct em_stat * e  = NULL;
+
+    if( stats == NULL )
+    {
+        return;
+    }
+
+    e = stats[0];
+    w = stats[1];
+
+    if( w == NULL || e == NULL )
+    {
+        return;
+    }
+
+    me = get_worker_by_pid();
+
+    if( me == NULL || me->type != WORKER_TYPE_PARENT )
+    {
+        _log( LOG_LEVEL_ERROR, "Failed to get parent process slot" );
+        return;
+    }
+
+    if( workers == NULL )
+    {
+        _log( LOG_LEVEL_ERROR, "PID table empty!" );
+        return;
+    }
+
+    for( i = 0; i < ( work_jobs + event_jobs ); i++ )
+    {
+        if( workers[i] == NULL )
+        {
+            _log( LOG_LEVEL_WARNING, "Stat collector skipping empty worker slot" );
+            continue;
+        }
+
+        // check mutex
+        if( _wait_and_set_mutex( workers[i] ) == false )
+        {
+            continue;
+        }
+
+        if( workers[i]->type == WORKER_TYPE_EVENT_PROCESSOR )
+        {
+            e->tx_success  += workers[i]->tx_success;
+            e->tx_fail     += workers[i]->tx_fail;
+            e->tx_duration += workers[i]->tx_duration;
+        }
+        else if( workers[i]->type == WORKER_TYPE_WORK_PROCESSOR )
+        {
+            w->tx_success  += workers[i]->tx_success;
+            w->tx_fail     += workers[i]->tx_fail;
+            w->tx_duration += workers[i]->tx_duration;
+        }
+
+        workers[i]->tx_success  = 0;
+        workers[i]->tx_fail     = 0;
+        workers[i]->tx_duration = 0.0;
+        workers[i]->stat_update = false;
+    }
+
+    return;
+}
+
+void _update_stats(
+    struct worker * me,
+    unsigned int    tx_success,
+    unsigned int    tx_fail,
+    double          tx_duration
+)
+{
+    if( me == NULL )
+    {
+        return;
+    }
+
+    if( _wait_and_set_mutex( me ) == false )
+    {
+        return;
+    }
+
+    if( tx_success > 0 )
+    {
+        me->tx_success += tx_success;
+    }
+
+    if( tx_fail > 0 )
+    {
+        me->tx_fail += tx_fail;
+    }
+
+    if( tx_duration > 0.0 )
+    {
+        me->tx_duration += tx_duration;
+    }
+
+    me->stat_update = false;
+
+    return;
+}
+
+bool _wait_and_set_mutex( struct worker * me )
+{
+    time_t lock_acquire_start = 0;
+    double random_backoff     = 0.0;
+    double last_backoff       = 0.0;
+
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    lock_acquire_start = time( NULL );
+
+    /*
+     *  Attempt to acquire the sig_atomic_t lock in SHM located at me->stat_update
+     *  note this is done in two parts using short circuit logic because
+     *      - me->stat_update may reside in the L3/L2/L1 cache due to frequent access
+     *      - this reduces cache writeback when the parent and worker are simultaneously
+     *        trying to clear / set the workers stats, respectively
+     *
+     *  This is not a super critical operation, hence the backoff and timeout failure modes
+     *  We _would_ like to update stats, but in the case we cannot, we'd rather continue doing
+     *  our actual job.
+     */
+    last_backoff = 1.0;
+
+    while( me->stat_update == true || __test_and_set( me ) == true )
+    {
+        if( difftime( time( NULL ), lock_acquire_start ) > MAX_LOCK_WAIT )
+        {
+            _log(
+                LOG_LEVEL_WARNING,
+                "Max lock wait time %d exceeded",
+                MAX_LOCK_WAIT
+            );
+            return false;
+        }
+
+        sleep( last_backoff + random_backoff );
+        last_backoff   = last_backoff + random_backoff;
+        random_backoff = 2 * ( ( double ) rand() / ( double ) RAND_MAX );
+    }
+
+    me->stat_update = true;
+    return true;
+}
+
+bool __test_and_set( struct worker * me )
+{
+    bool initial = true;
+    initial = me->stat_update;
+    me->stat_update = true;
+    return initial;
+}
+
 /*
- * bool _rollback_transaction( void )
+ * bool _rollback_transaction( struct worker * )
  *     rolls back a SQL transaction
  *
  * Arguments:
- *     None
+ *     struct worker * me: PID slot of the process rolling the transaction back
  * Return:
  *     bool is_success: true indicates the transaction was successfully rolled back
  * Error Conditions:
@@ -800,7 +967,7 @@ struct worker * new_worker(
  */
 bool _rollback_transaction( struct worker * me )
 {
-    PGresult * result = NULL;
+    PGresult * result   = NULL;
 
     if( !( me->tx_in_progress ) )
     {
@@ -829,15 +996,23 @@ bool _rollback_transaction( struct worker * me )
 
     PQclear( result );
     me->tx_in_progress = false;
+    _update_stats(
+        me,
+        0,
+        1,
+        difftime( time( NULL ), me->tx_start )
+    );
+
+    me->tx_start = 0;
     return true;
 }
 
 /*
- * bool _commit_transaction( void )
+ * bool _commit_transaction( struct worker * )
  *     Commits a SQL transaction.
  *
  * Arguments:
- *    None
+ *    struct worker * me: PID slot of process commiting the transaction
  * Return:
  *    bool is_success: true indicates that the transaction was successfully
  *                     committed.
@@ -875,15 +1050,25 @@ bool _commit_transaction( struct worker * me )
 
     PQclear( result );
     me->tx_in_progress = false;
+
+    _update_stats(
+        me,
+        1,
+        0,
+        difftime( time( NULL ), me->tx_start )
+    );
+
+    me->tx_start = 0;
+
     return true;
 }
 
 /*
- * bool _begin_transaction( void )
+ * bool _begin_transaction( struct worker * )
  *     Begins a SQL transaction, sets the global tx state flag in the process.
  *
  * Arguments:
- *     None
+ *     struct worker * me: PID slot of the process starting the transaction
  * Return:
  *     bool is_success: Indicates that the transaction was successfully begun.
  * Error Conditions:
@@ -920,6 +1105,7 @@ bool _begin_transaction( struct worker * me )
 
     PQclear( result );
     me->tx_in_progress = true;
+    me->tx_start = time( NULL );
     return true;
 }
 
@@ -1326,7 +1512,7 @@ void * create_shared_memory( size_t size )
 
 /*
  * void _manage_children( void (*function)( void * )
- *     Loop for parent process to run, monitors child processes for
+ *     Task for parent process to run, monitors child processes for
  *     unexpected termination, and if so inclined, attempts to restart them.
  *
  * Arguments:
@@ -1344,158 +1530,150 @@ void _manage_children( void (*function)( void * ) )
     struct worker * worker   = NULL;
     unsigned short  type     = 0;
     pid_t           pid      = 0;
-    bool            alive    = true; // Indicates at least one child is alive
     unsigned int    tid      = 0;
     int             wstatus  = 0;
-    //trap parent here
-    // TODO: Add child monitoring, config reload support
 
-    while( alive )
+    _log( LOG_LEVEL_DEBUG, "Parent entering maintenance loop" );
+
+    for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
     {
-        sleep( 10 );
-        alive = false;
-        _log( LOG_LEVEL_DEBUG, "Parent entering maintenance loop" );
-
-        for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
+        if( workers[tid] == NULL )
         {
-            if( workers[tid] == NULL )
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Skipping dead worker at index %u",
+                tid
+            );
+            continue;
+        }
+
+        worker = workers[tid];
+        type   = worker->type;
+        pid    = worker->pid;
+
+        waitpid( pid, &wstatus, WNOHANG );
+
+        if( WIFSIGNALED( wstatus ) ) // Detect abnormal exit
+        {
+            worker->status = STATUS_DEAD;
+
+            _log(
+                LOG_LEVEL_WARNING,
+                "Worker process %d found dead from signal %d",
+                pid,
+                WTERMSIG( wstatus )
+            );
+        }
+
+        wstatus = 0;
+
+        if( worker->status == STATUS_DEAD )
+        {
+            _log(
+                LOG_LEVEL_WARNING,
+                "Found dead worker (%s queue, pid %d),"\
+                " (sigt flag: %s) restarting...",
+                type == WORKER_TYPE_EVENT_PROCESSOR ? "Event" : "Work",
+                pid,
+                got_sigterm ? "T" : "F"
+            );
+
+            sleep( 5 );
+
+            if( worker->status == STATUS_DEAD && !single_step_only )
             {
-                _log(
-                    LOG_LEVEL_DEBUG,
-                    "Skipping dead worker at index %u",
-                    tid
-                );
-                continue;
-            }
+                // We ignore single stepping as all shm will be cleaned up
+                // as the parent exits
+                int status;
+                waitpid( pid, &status, WNOHANG );
 
-            worker = workers[tid];
-            type   = worker->type;
-            pid    = worker->pid;
-
-            waitpid( pid, &wstatus, WNOHANG );
-
-            if( WIFSIGNALED( wstatus ) ) // Detect abnormal exit
-            {
-                worker->status = STATUS_DEAD;
-
-                _log(
-                    LOG_LEVEL_WARNING,
-                    "Worker process %d found dead from signal %d",
-                    pid,
-                    WTERMSIG( wstatus )
-                );
-            }
-
-            wstatus = 0;
-
-            if( worker->status == STATUS_DEAD )
-            {
-                _log(
-                    LOG_LEVEL_WARNING,
-                    "Found dead worker (%s queue, pid %d),"\
-                    " (sigt flag: %s) restarting...",
-                    type == WORKER_TYPE_EVENT_PROCESSOR ? "Event" : "Work",
-                    pid,
-                    got_sigterm ? "T" : "F"
-                );
-
-                sleep( 5 );
-
-                if( worker->status == STATUS_DEAD && !single_step_only )
+                if( status != 0 )
                 {
-                    // We ignore single stepping as all shm will be cleaned up
-                    // as the parent exits
-                    int status;
-                    waitpid( pid, &status, WNOHANG );
+                    // Child terminated abnormally or is in a stopped state
+                    kill( pid, SIGTERM );
+                    waitpid( pid, NULL, WNOHANG );
+                }
 
-                    if( status != 0 )
+                if( ALLOW_WORKER_RESTART && function != NULL )
+                {
+                    _log( LOG_LEVEL_DEBUG, "In restart block" );
+                    if( got_sigterm || got_sigint )
                     {
-                        // Child terminated abnormally or is in a stopped state
-                        kill( pid, SIGTERM );
-                        waitpid( pid, NULL, WNOHANG );
+                        __term();
                     }
 
-                    if( ALLOW_WORKER_RESTART && function != NULL )
-                    {
-                        _log( LOG_LEVEL_DEBUG, "In restart block" );
-                        if( got_sigterm || got_sigint )
-                        {
-                            __term();
-                        }
+                    worker = new_worker(
+                        type,
+                        tid,
+                        function,
+                        parent->my_argc,
+                        parent->my_argv,
+                        worker
+                    );
 
-                        worker = new_worker(
-                            type,
-                            tid,
-                            function,
-                            parent->my_argc,
-                            parent->my_argv,
-                            worker
+                    if( worker == NULL )
+                    {
+                        _log(
+                            LOG_LEVEL_ERROR,
+                            "Failed to restart %s queue worker",
+                            type == WORKER_TYPE_EVENT_PROCESSOR ? "Event" : "Work"
                         );
 
-                        if( worker == NULL )
-                        {
-                            _log(
-                                LOG_LEVEL_ERROR,
-                                "Failed to restart %s queue worker",
-                                type == WORKER_TYPE_EVENT_PROCESSOR ? "Event" : "Work"
-                            );
-
-                            continue;
-                        }
-
-                        sleep( 2 );
-
-                        pid = worker->pid;
-
-                        if( worker->status == STATUS_DEAD )
-                        {
-                            kill( pid, SIGTERM );
-                            waitpid( pid, NULL, WNOHANG );
-
-                            if( munmap( worker, sizeof( struct worker ) ) != 0 )
-                            {
-                                _log(
-                                    LOG_LEVEL_ERROR,
-                                    "Worker pid %d failed to start, "\
-                                    "marking PID table entry as dead",
-                                    pid
-                                );
-                            }
-
-                            worker = NULL;
-                            pid    = 0;
-                        }
-
-                        workers[tid] = worker;
-                        alive        = true;
+                        continue;
                     }
-                    else
+
+                    sleep( 2 );
+
+                    pid = worker->pid;
+
+                    if( worker->status == STATUS_DEAD )
                     {
-                        worker->pid    = 0;
-                        worker->type   = 0;
-                        worker->status = STATUS_DEAD;
+                        kill( pid, SIGTERM );
+                        waitpid( pid, NULL, WNOHANG );
 
                         if( munmap( worker, sizeof( struct worker ) ) != 0 )
                         {
                             _log(
                                 LOG_LEVEL_ERROR,
-                                "Failed to free worker shared memory"
+                                "Worker pid %d failed to start, "\
+                                "marking PID table entry as dead",
+                                pid
                             );
                         }
 
-                        workers[tid] = NULL;
-                        worker       = NULL;
+                        worker = NULL;
+                        pid    = 0;
                     }
+
+                    workers[tid] = worker;
+                }
+                else
+                {
+                    worker->pid    = 0;
+                    worker->type   = 0;
+                    worker->status = STATUS_DEAD;
+
+                    if( munmap( worker, sizeof( struct worker ) ) != 0 )
+                    {
+                        _log(
+                            LOG_LEVEL_ERROR,
+                            "Failed to free worker shared memory"
+                        );
+                    }
+
+                    workers[tid] = NULL;
+                    worker       = NULL;
                 }
             }
-            else
-            {
-                alive = true;
-            }
+        }
+        else
+        {
+            // Send a pulse
+            worker->last_heartbeat = time( NULL );
         }
     }
 
-    __term();
+    return;
 }
 
 /*

@@ -4,9 +4,9 @@ Documentation=https://bitbucket.org/neadwerx/event_manager/src/master/
 Wants=NetworkManager.service
 
 [Service]
-Type=oneshot
+Type=forking
 ExecStart=/usr/bin/event_manager-startup.sh
-RemainAfterExit=true
+RemainAfterExit=false
 ExecStop=/usr/bin/event_manager-shutdown.sh
 StandardOutput=journal
 ExecReload=/usr/bin/event_manager-reload.sh

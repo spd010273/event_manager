@@ -19,7 +19,7 @@
 // Global Variables
 char * ext_schema          = NULL;
 bool   cyanaudit_installed = false;
-
+bool   enable_stats        = false;
 /*
  * PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
  *     Executes a given query. Has handlers present for:
@@ -119,7 +119,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         retry_counter++;
         // Randomly increment the backoff counter to prevent constant polling
         // of a database that may be in recovery
-        last_backoff_time = (int) ( 10 * ( rand() / RAND_MAX ) )
+        last_backoff_time = (int) ( 10 * ( ( double ) rand() / ( double ) RAND_MAX ) )
                           + last_backoff_time;
 
         if( me->conn != NULL )
@@ -365,6 +365,12 @@ void _queue_loop( struct worker * me )
             );
 
             break;
+        }
+        
+        if( difftime( time( NULL ), me->last_heartbeat ) > MAX_HEARTBEAT_DURATION )
+        {
+            // Parent is dead! Long live SystemD!
+            __term();
         }
 
 #ifdef BLOCKING_SELECT
@@ -1722,6 +1728,8 @@ int main( int argc, char ** argv )
     unsigned int     tid              = 0;
     int              random_ind       = 4; // determined by dice roll
     int              row_count        = 0;
+    time_t           last_stat_update = 0;
+    struct em_stat * stats[2]         = {NULL};
 
     _parse_args( argc, argv );
 
@@ -1734,6 +1742,7 @@ int main( int argc, char ** argv )
     }
 
     //Crapily seed PRNG for backoff of connection attempts on DB failure
+    // and mutex acquisition
     srand( random_ind * time(0) );
 
     params[0] = EXTENSION_NAME;
@@ -1791,7 +1800,37 @@ int main( int argc, char ** argv )
         cyanaudit_installed = true;
     }
 
-    PQclear( cyanaudit_result );
+    if( cyanaudit_result != NULL )
+    {
+        PQclear( cyanaudit_result );
+    }
+
+    result = _execute_query(
+        parent,
+        ( char * ) test_stat_table,
+        NULL,
+        0
+    );
+
+    if(
+           result != NULL
+        && PQntuples( result ) > 0
+      )
+    {
+        enable_stats = true;
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_INFO,
+            "Statistics collection is disabled - extension not up-to-date"
+        );
+    }
+
+    if( result != NULL )
+    {
+        PQclear( result );
+    }
 
     if( parent->conn != NULL )
     {
@@ -1835,9 +1874,186 @@ int main( int argc, char ** argv )
         );
     }
 
-    _manage_children( &_queue_loop_wrapper );
+    last_stat_update = time( NULL );
+
+    while( 1 )
+    {
+        // Main loop for parent
+        if( enable_stats && difftime( time( NULL ), last_stat_update ) > STAT_UPDATE_INTERVAL )
+        {
+            _log( LOG_LEVEL_DEBUG, "Updating stats..." );
+            _gather_and_update_stats( parent, stats );
+            last_stat_update = time( NULL );
+        }
+
+        sleep( 10 );
+        _manage_children( &_queue_loop_wrapper );
+    }
 
     return 0;
+}
+
+void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
+{
+    PGresult * stat_update         = NULL;
+    char *     params[4]           = {NULL};
+    char       tx_fail_buff[64]    = {0};
+    char       tx_success_buff[64] = {0};
+    char       tx_duration_buff[7] = {0};
+
+    if( me == NULL ||  stats == NULL )
+    {
+        return;
+    }
+
+    if( stats[0] == NULL )
+    {
+        stats[0] = calloc(
+            sizeof( struct em_stat ),
+            1
+        );
+    }
+
+    if( stats[1] == NULL )
+    {
+        stats[1] = calloc(
+            sizeof( struct em_stat ),
+            1
+        );
+    }
+
+    if( stats[0] == NULL || stats[1] == NULL )
+    {
+        _log( LOG_LEVEL_ERROR, "Failed to allocate statistics rollup" );
+
+        if( stats[0] != NULL )
+        {
+            free( stats[0] );
+            stats[0] = NULL;
+        }
+
+        if( stats[1] != NULL )
+        {
+            free( stats[1] );
+            stats[1] = NULL;
+        }
+
+        return;
+    }
+
+    _gather_child_stats_to_self( stats );
+    
+    // Dont perform the update if there's nothing _to_ update
+    if(
+           stats[0] != NULL
+        && (
+                stats[0]->tx_success  != 0
+             || stats[0]->tx_fail     != 0
+             || stats[0]->tx_duration != 0.0
+           )
+      )
+    {
+        if( me->conn == NULL )
+        {
+            me->conn = PQconnectdb( conninfo );
+        }
+
+        snprintf( tx_success_buff, 64, "%u", stats[0]->tx_success );
+        snprintf( tx_fail_buff, 64, "%u", stats[0]->tx_fail );
+
+        params[0] = tx_success_buff;
+        params[1] = tx_fail_buff;
+        params[2] = gcvt( stats[0]->tx_duration, 6, tx_duration_buff );
+        params[3] = WORKER_TITLE_EVENT_PROCESSOR;
+
+        stat_update = _execute_query(
+            me,
+            ( char * ) insert_stat_rollup,
+            params,
+            4
+        );
+
+        if( stat_update == NULL )
+        {
+            if( me->conn != NULL )
+            {
+                PQfinish( me->conn );
+                me->conn = NULL;
+            }
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Failed to update event processor stats"
+            );
+
+            return;
+        }
+
+        free( stats[0] );
+        stats[0] = NULL;
+    }
+
+    // Dont perform the update if there's nothing _to_ update
+    if(
+           stats[1] != NULL
+        && (
+               stats[1]->tx_success  != 0
+            || stats[1]->tx_fail     != 0
+            || stats[1]->tx_duration != 0.0
+           )
+      )
+    {
+        if( me->conn == NULL )
+        {
+            me->conn = PQconnectdb( conninfo );
+        }
+
+        snprintf( tx_success_buff, 64, "%u", stats[1]->tx_success );
+        snprintf( tx_fail_buff, 64, "%u", stats[1]->tx_fail );
+
+        params[0] = tx_success_buff;
+        params[1] = tx_fail_buff;
+        params[2] = gcvt( stats[1]->tx_duration, 6, tx_duration_buff );
+        params[3] = WORKER_TITLE_WORK_PROCESSOR;
+
+        stat_update = _execute_query(
+            me,
+            ( char * ) insert_stat_rollup,
+            params,
+            4
+        );
+
+        if( stat_update == NULL )
+        {
+            if( me->conn != NULL )
+            {
+                PQfinish( me->conn );
+                me->conn = NULL;
+            }
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Failed to update work processor stats"
+            );
+            return;
+        }
+
+        free( stats[1] );
+        stats[1] = NULL;
+    }
+
+    if( me->conn != NULL )
+    {
+        PQfinish( me->conn );
+    }
+
+    me->conn = NULL;
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Stats updated"
+    );
+
+    return;
 }
 
 /*

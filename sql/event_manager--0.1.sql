@@ -320,6 +320,21 @@ COMMENT ON COLUMN @extschema@.tb_event_table_work_item_instance.metadata IS 'Can
 CREATE INDEX ix_event_table_work_item_instance_src ON @extschema@.tb_event_table_work_item_instance( event_table_work_item, source_pk );
 CREATE INDEX ix_event_table_work_item_instance_tgt ON @extschema@.tb_event_table_work_item_instance( event_table_work_item, target_pk );
 
+CREATE TABLE @extschema@.tb_statistic
+(
+    tx_success      BIGINT,
+    tx_fail         BIGINT,
+    tx_duration     DOUBLE PRECISION,
+    type            VARCHAR,
+    recorded        TIMESTAMP NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE @extschema@.tb_statistic IS 'Contains basic worker statistics';
+COMMENT ON COLUMN @extschema@.tb_statistic.tx_success IS 'The number of successful transactions committed by this type of worker';
+COMMENT ON COLUMN @extschema@.tb_statistic.tx_fail IS 'The number of failed transactions by this type of worker';
+COMMENT ON COLUMN @extschema@.tb_statistic.tx_duration IS 'The cumulative duration, in seconds, of all transactions during the reporting window for this worker';
+COMMENT ON COLUMN @extschema@.tb_statistic.recorded IS 'The timestamp which these statistics were recorded';
+
 CREATE OR REPLACE FUNCTION @extschema@.fn_dummy_when_function
 (
     in_event_table_work_item    INTEGER,
