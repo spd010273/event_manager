@@ -170,4 +170,6 @@ static const char * insert_stat_rollup = "\
                     $3::DOUBLE PRECISION, \
                     $4::VARCHAR \
                 )";
+static const char * pid_lock = "\
+    SELECT pg_try_advisory_lock( $1::REGCLASS::OID::INTEGER, $2::INTEGER ) AS result";
 #endif

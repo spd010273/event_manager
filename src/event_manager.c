@@ -67,6 +67,14 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         }
 
         me->conn = PQconnectdb( conninfo );
+        if( _get_advisory_lock( me ) )
+        {
+            _log( LOG_LEVEL_DEBUG, "Obtained advisory lock" );
+        }
+        else
+        {
+            _log( LOG_LEVEL_DEBUG, "Adv lock failed!" );
+        }
     }
 
     _log(
@@ -136,7 +144,18 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
 
         sleep( last_backoff_time );
         me->conn = PQconnectdb( conninfo );
-        _set_application_name( me ); // May fail if we haven't connected
+        if( me->conn != NULL )
+        {
+            _set_application_name( me ); // May fail if we haven't connected
+            if( _get_advisory_lock( me ) )
+            {
+                _log( LOG_LEVEL_DEBUG, "Obtained advisory lock" );
+            }
+            else
+            {
+                _log( LOG_LEVEL_DEBUG, "Adv lock failed !" );
+            }
+        }
     }
 
     _log(
@@ -366,7 +385,7 @@ void _queue_loop( struct worker * me )
 
             break;
         }
-        
+
         if( difftime( time( NULL ), me->last_heartbeat ) > MAX_HEARTBEAT_DURATION )
         {
             // Parent is dead! Long live SystemD!
@@ -1942,7 +1961,7 @@ void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
     }
 
     _gather_child_stats_to_self( stats );
-    
+
     // Dont perform the update if there's nothing _to_ update
     if(
            stats[0] != NULL
@@ -2638,3 +2657,82 @@ void _set_application_name( struct worker * me )
     free( application_name_command );
     return;
 }
+
+bool _get_advisory_lock( struct worker * me )
+{
+    char * params[2]  = {NULL};
+    PGresult * result = NULL;
+    char   pid[6]     = {0};
+    char * adv_result = NULL;
+
+    if( me->conn == NULL )
+    {
+        return false;
+    }
+
+    if( me->type == WORKER_TYPE_WORK_PROCESSOR )
+    {
+        params[0] = "event_manager.tb_work_queue";
+    }
+    else if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
+    {
+        params[0] = "event_manager.tb_event_queue";
+    }
+    else
+    {
+        return true;
+    }
+
+    snprintf( pid, 5, "%d", me->pid );
+
+    params[1] = pid;
+
+    result = PQexecParams(
+        me->conn,
+        pid_lock,
+        2,
+        NULL,
+        ( const char * const * ) params,
+        NULL,
+        NULL,
+        0
+    );
+
+    if(
+            result != NULL
+        && !(
+                PQresultStatus( result ) == PGRES_COMMAND_OK
+             || PQresultStatus( result ) == PGRES_TUPLES_OK
+            )
+      )
+    {
+        if( result != NULL )
+        {
+            PQclear( result );
+        }
+
+        return false;
+    }
+
+    adv_result = get_column_value( 0, result, "result" );
+
+    if( adv_result == NULL )
+    {
+        if( result != NULL )
+        {
+            PQclear( result );
+        }
+
+        return false;
+    }
+
+    if( strcmp( adv_result, "t" ) == 0 || strcmp( adv_result, "T" ) == 0 )
+    {
+        PQclear( result );
+        return true;
+    }
+
+    PQclear( result );
+    return false;
+}
+

@@ -95,6 +95,8 @@ bool _begin_transaction( struct worker * );
 void set_session_gucs( struct worker *, char * );
 void clear_session_gucs( struct worker *, char * );
 void _set_application_name( struct worker * );
+bool _get_advisory_lock( struct worker * );
+
 // Integration functions
 void _cyanaudit_integration( struct worker *, char * );
 
