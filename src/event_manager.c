@@ -2654,7 +2654,7 @@ bool _get_advisory_lock( struct worker * me )
 {
     char * params[2]  = {NULL};
     PGresult * result = NULL;
-    char   pid[6]     = {0};
+    char   pid[64]     = {0};
     char * adv_result = NULL;
 
     if( me->conn == NULL )
@@ -2675,7 +2675,7 @@ bool _get_advisory_lock( struct worker * me )
         return true;
     }
 
-    snprintf( pid, 6, "%d", me->pid );
+    snprintf( pid, 64, "%d", me->pid );
 
     params[1] = pid;
 
