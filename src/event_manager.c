@@ -2675,7 +2675,7 @@ bool _get_advisory_lock( struct worker * me )
         return true;
     }
 
-    snprintf( pid, 5, "%d", me->pid );
+    snprintf( pid, 6, "%d", me->pid );
 
     params[1] = pid;
 
@@ -2716,7 +2716,6 @@ bool _get_advisory_lock( struct worker * me )
             PQclear( result );
         }
 
-        _log( LOG_LEVEL_ERROR, "Failed to get advisory lock: NULL result" );
         return false;
     }
 
@@ -2727,7 +2726,6 @@ bool _get_advisory_lock( struct worker * me )
     }
 
     PQclear( result );
-    _log( LOG_LEVEL_ERROR, "Failed to get advisory lock: lock could not be obtained" );
     return false;
 }
 
