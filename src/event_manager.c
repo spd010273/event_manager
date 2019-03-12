@@ -2703,6 +2703,7 @@ bool _get_advisory_lock( struct worker * me )
             PQclear( result );
         }
 
+        _log( LOG_LEVEL_ERROR, "Failed to get advisory lock: %s", PQerrorMessage( me->conn ) );
         return false;
     }
 
@@ -2715,6 +2716,7 @@ bool _get_advisory_lock( struct worker * me )
             PQclear( result );
         }
 
+        _log( LOG_LEVEL_ERROR, "Failed to get advisory lock: NULL result" );
         return false;
     }
 
@@ -2725,6 +2727,7 @@ bool _get_advisory_lock( struct worker * me )
     }
 
     PQclear( result );
+    _log( LOG_LEVEL_ERROR, "Failed to get advisory lock: lock could not be obtained" );
     return false;
 }
 
