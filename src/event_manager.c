@@ -67,13 +67,9 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         }
 
         me->conn = PQconnectdb( conninfo );
-        if( _get_advisory_lock( me ) )
+        if( !_get_advisory_lock( me ) )
         {
-            _log( LOG_LEVEL_DEBUG, "Obtained advisory lock" );
-        }
-        else
-        {
-            _log( LOG_LEVEL_DEBUG, "Adv lock failed!" );
+            _log( LOG_LEVEL_WARNING, "Failed to obtaine advisory PID lock" );
         }
     }
 
@@ -147,13 +143,9 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         if( me->conn != NULL )
         {
             _set_application_name( me ); // May fail if we haven't connected
-            if( _get_advisory_lock( me ) )
+            if( !_get_advisory_lock( me ) )
             {
-                _log( LOG_LEVEL_DEBUG, "Obtained advisory lock" );
-            }
-            else
-            {
-                _log( LOG_LEVEL_DEBUG, "Adv lock failed !" );
+                _log( LOG_LEVEL_WARNING, "Failed to obtained advisory PID lock" );
             }
         }
     }
