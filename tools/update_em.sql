@@ -14,17 +14,8 @@ COPY( SELECT * FROM event_manager.tb_work_queue ) TO '/tmp/tb_work_queue.csv' WI
 DROP EXTENSION event_manager CASCADE;
 CREATE EXTENSION event_manager;
 
-CREATE TEMP TABLE tt_et
-(
-    event_table INTEGER,
-    schema_name VARCHAR,
-    table_name VARCHAR,
-    no_trigger BOOLEAN
-);
-
 COPY event_manager.tb_action FROM '/tmp/tb_action.csv' WITH CSV HEADER;
-COPY tt_et FROM '/tmp/tb_event_table.csv' WITH CSV HEADER;
-INSERT INTO event_manager.tb_event_table( event_table, schema_name, table_name ) SELECT event_table, schema_name, table_name FROM tt_et;
+COPY event_manager.tb_event_table FROM '/tmp/tb_event_table.csv' WITH CSV HEADER;
 COPY event_manager.tb_event_table_work_item FROM '/tmp/tb_event_table_work_item.csv' WITH CSV HEADER;
 COPY event_manager.tb_event_table_work_item_instance FROM '/tmp/tb_event_table_work_item_instance.csv' WITH CSV HEADER;
 COPY event_manager.tb_event_queue FROM '/tmp/tb_event_queue.csv' WITH CSV HEADER;
