@@ -20,7 +20,7 @@ which pg_config | grep 'no\spg_config' # Make sure it is in the users PATH
 sudo ldconfig -v | grep libpq
 ldconfig -p | grep libpq
 
-git clone https://spd010273@bitbucket.org/neadwerx/event_manager.git
+git clone https://bitbucket.org/neadwerx/event_manager.git
 cd event_manager
 git submodule init
 git submodule update

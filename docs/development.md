@@ -10,6 +10,10 @@ make clean && make && sudo make install && psql -U postgres -h <host> -p 5432 -d
 ```
 This rebuilds the code and reinstalls the extension files
 
+The tools directory contains a rebuild script for event manager that updates the extension tables / functions via reinstallation, this file is in tools/update_em.sql
+
+Additionally, there is a setup script in the tools directory that initializes event manager GUCs for your specific application.
+
 ## Debugging
 
 To enable debug mode in the Event and Work queue processing daemons, uncomment the line in Makefile 'PG_CPPFLAGS = -DDEBUG -g'
