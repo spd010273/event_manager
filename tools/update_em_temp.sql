@@ -14,7 +14,7 @@ COPY( SELECT * FROM event_manager.tb_work_queue ) TO '/tmp/tb_work_queue.csv' WI
 DROP EXTENSION event_manager CASCADE;
 CREATE EXTENSION event_manager;
 
-CREATE TEMP TABLE tt_et ON COMMIT DROP
+CREATE TEMP TABLE tt_et
 (
     event_table INTEGER,
     schema_name VARCHAR,
