@@ -35,6 +35,7 @@
 #include <pwd.h>
 #include <dirent.h>
 #include <time.h>
+#include <sys/time.h>
 
 #define LOG_LEVEL_WARNING "WARNING"
 #define LOG_LEVEL_ERROR "ERROR"

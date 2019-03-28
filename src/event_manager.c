@@ -20,6 +20,7 @@
 char * ext_schema          = NULL;
 bool   cyanaudit_installed = false;
 bool   enable_stats        = false;
+
 /*
  * PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
  *     Executes a given query. Has handlers present for:
@@ -1274,9 +1275,15 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
         );
     }
 
-    response = curl_easy_setopt( me->curl_handle, CURLOPT_URL,           remote_call              );
-    response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEFUNCTION, _curl_write_callback     );
-    response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEDATA,     ( void * ) &write_buffer );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_URL,            remote_call              );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEFUNCTION,  _curl_write_callback     );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEDATA,      ( void * ) &write_buffer );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_CONNECTTIMEOUT, CURL_TIMEOUT             );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_TIMEOUT,        CURL_TIMEOUT             );
+
+#ifdef DEBUG
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_VERBOSE, 1L );
+#endif
 
     if( response == CURLE_OK )
     {
@@ -1286,6 +1293,7 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
             action->method,
             param_list
         );
+
         response = curl_easy_perform( me->curl_handle );
         _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
     }

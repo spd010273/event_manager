@@ -268,15 +268,26 @@ void _usage( char * message )
  * Error Conditions:
  *     None
  */
+
 void _log( char * log_level, char * message, ... )
 {
-    va_list         args          = {{0}};
-    FILE *          output_handle = NULL;
+    va_list        args          = {{0}};
+    FILE *         output_handle = NULL;
+    struct timeval tv            = {0};
+    char           buff_time[28] = {0}; // Time gon' give it to ya
 
     if( message == NULL )
     {
         return;
     }
+
+    gettimeofday( &tv, NULL );
+    strftime(
+        buff_time,
+        sizeof( buff_time ) / sizeof( *buff_time ),
+        "%Y-%m-%d %H:%M:%S",
+        gmtime( &tv.tv_sec )
+    );
 
     // Setup logfile iff we're daemonizing and the parent's worker slot has
     // been inited
@@ -319,14 +330,21 @@ void _log( char * log_level, char * message, ... )
 #endif
         fprintf(
             output_handle,
-            "%s: ",
-            log_level
+            "%s.%03d ",
+            buff_time,
+            ( int ) ( tv.tv_usec / 1000 )
         );
 
         fprintf(
             output_handle,
-            "(%d) ",
+            "[%d] ",
             getpid()
+        );
+
+        fprintf(
+            output_handle,
+            "%s: ",
+            log_level
         );
 
         vfprintf(
