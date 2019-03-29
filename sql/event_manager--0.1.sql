@@ -532,7 +532,7 @@ BEGIN
                         (
                             my_event_table_work_item,
                             my_uid,
-                            now(),
+                            clock_timestamp(),
                             my_pk_value,
                             substr( TG_OP, 1, 1 ),
                             old_record,

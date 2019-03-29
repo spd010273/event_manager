@@ -1011,11 +1011,13 @@ static size_t _curl_write_callback(
  */
 bool execute_remote_uri_call( struct worker * me, struct action_result * action )
 {
-    struct curl_response write_buffer = {0};
-    CURLcode             response     = {0};
-    char *               remote_call  = NULL;
-    char *               param_list   = NULL;
-    unsigned int         malloc_size  = 2;
+    struct curl_response write_buffer  = {0};
+    CURLcode             response      = {0};
+    char *               remote_call   = NULL;
+    char *               param_list    = NULL;
+    unsigned int         malloc_size   = 2;
+    long int             response_code = 0;
+    unsigned short       retry_count   = 0;
 
     if( action == NULL )
     {
@@ -1202,18 +1204,6 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
         return false;
     }
 
-    response = curl_easy_setopt( me->curl_handle, CURLOPT_TIMEOUT, API_CALL_TIMEOUT );
-
-    if( response != CURLE_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to set curl TIMEOUT opt %s",
-            curl_easy_strerror( response )
-        );
-        return false;
-    }
-
     // Initialize buffer
     write_buffer.pointer = malloc( 1 );
 
@@ -1285,32 +1275,68 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
     response = curl_easy_setopt( me->curl_handle, CURLOPT_VERBOSE, 1L );
 #endif
 
-    if( response == CURLE_OK )
+    if( response != CURLE_OK )
     {
         _log(
-            LOG_LEVEL_DEBUG,
-            "Making %s call with param list %s",
-            action->method,
-            param_list
+            LOG_LEVEL_ERROR,
+            "Failed to set cURLopts"
         );
+        return false;
+    }
+    
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Making %s call with param list %s",
+        action->method,
+        param_list
+    );
 
-        response = curl_easy_perform( me->curl_handle );
-        _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
+    HTTP_RETRY:
+
+    response = curl_easy_perform( me->curl_handle );
+    _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
+
+    if( param_list != NULL )
+    {
+        free( param_list );
+        param_list = NULL;
     }
 
-    free( param_list );
+    curl_easy_getinfo(
+        me->curl_handle,
+        CURLINFO_RESPONSE_CODE,
+        &response_code
+    );
+
+    _log( LOG_LEVEL_DEBUG, "Got HTTP %d", (int) response_code );
 
     if( response != CURLE_OK )
     {
         _log(
             LOG_LEVEL_ERROR,
-            "Failed %s %s: %s",
+            "Failed %s %s: %s (%s)",
             action->method,
             remote_call,
-            curl_easy_strerror( response )
+            curl_easy_strerror( response ),
+            write_buffer.pointer == NULL ?
+                "no additional information" :
+                write_buffer.pointer
         );
 
-        free( write_buffer.pointer );
+        if( response == CURLE_OPERATION_TIMEDOUT && retry_count == 0 )
+        {
+            _log( LOG_LEVEL_DEBUG, "We timedout my dudes, retrying..." );
+            sleep( RETRY_BACKOFF );
+            retry_count++;
+            goto HTTP_RETRY;
+        }
+
+
+        // We should probably retry before this point as we'll need the buffer for response writeback
+        if( write_buffer.pointer != NULL )
+        {
+            free( write_buffer.pointer );
+        }
 
         if(
               strcmp( action->method, "GET" ) == 0
@@ -1324,6 +1350,27 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
             }
         }
 
+        return false;
+    }
+
+    if(
+          ( response_code / 100 ) == 4
+       || ( response_code / 100 ) == 5
+      ) // We got a 4XX or 5XX HTTP error
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "HTTP Request failed with code %d\n %s %s: %s (%s)",
+            ( int ) response_code,
+            action->method,
+            remote_call,
+            curl_easy_strerror( response ),
+            write_buffer.pointer == NULL ?
+                "No additional information" :
+                write_buffer.pointer
+        );
+
+        // We could probably put a special handler for HTTP timeouts
         return false;
     }
 

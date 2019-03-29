@@ -29,7 +29,6 @@
 
 /* Constants */
 #define MAX_CONN_RETRIES 3
-#define API_CALL_TIMEOUT 300L // In seconds
 #define STAT_UPDATE_INTERVAL 60 // In seconds
 
 // In seconds, the longest time we can go without hearing from our parent process
@@ -49,7 +48,9 @@
 #define MAX_REGEX_GROUPS 1
 #define MAX_REGEX_MATCHES 100
 
-#define CURL_TIMEOUT 600L
+// Timeout for both curl connections and request duration
+#define CURL_TIMEOUT 10L
+#define RETRY_BACKOFF 5L
 
 // SQL States
 #define SQL_STATE_TERMINATED_BY_ADMINISTRATOR "57P01"
