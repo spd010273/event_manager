@@ -49,6 +49,7 @@
 #define MAX_REGEX_MATCHES 100
 
 // Timeout for both curl connections and request duration
+#define TIMEOUT_RETRY_LIMIT 1L
 #define CURL_TIMEOUT 10L
 #define RETRY_BACKOFF 5L
 

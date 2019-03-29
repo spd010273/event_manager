@@ -1283,7 +1283,7 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
         );
         return false;
     }
-    
+
     _log(
         LOG_LEVEL_DEBUG,
         "Making %s call with param list %s",
@@ -1323,9 +1323,12 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
                 write_buffer.pointer
         );
 
-        if( response == CURLE_OPERATION_TIMEDOUT && retry_count == 0 )
+        if(
+                response == CURLE_OPERATION_TIMEDOUT
+             && retry_count < TIMEOUT_RETRY_LIMIT
+          )
         {
-            _log( LOG_LEVEL_DEBUG, "We timedout my dudes, retrying..." );
+            _log( LOG_LEVEL_DEBUG, "Request failed with timeout, retrying..." );
             sleep( RETRY_BACKOFF );
             retry_count++;
             goto HTTP_RETRY;
@@ -1379,6 +1382,15 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
         "Got response: '%s'",
         write_buffer.pointer
     );
+
+    if( retry_count > 0 )
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "URI call succeeded after %d tries",
+            ( int ) retry_count
+        );
+    }
 
     free( write_buffer.pointer );
 
