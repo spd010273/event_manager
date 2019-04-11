@@ -263,6 +263,7 @@ COMMENT ON COLUMN @extschema@.tb_event_queue.op IS 'The DML operation that cause
 COMMENT ON COLUMN @extschema@.tb_event_queue.old IS 'Copy of the plpgsql OLD psuedorecord';
 COMMENT ON COLUMN @extschema@.tb_event_queue.new IS 'Copy of the plpgsql new psuedorecord';
 COMMENT ON COLUMN @extschema@.tb_event_queue.session_values IS 'Copy of the comma-delimited session GUCs specified in @extschema@.session_gucs';
+COMMENT ON COLUMN @extschema@.tb_event_queue.failed IS 'Indicates that this item has been dequeued but failed to execute due to a problem with the work_item_query.';
 
 DO
  $_$
@@ -302,6 +303,7 @@ COMMENT ON COLUMN @extschema@.tb_work_queue.recorded IS 'Recorded timestamp from
 COMMENT ON COLUMN @extschema@.tb_work_queue.transaction_label IS 'Label for transaction in Cyanaudit, if installed';
 COMMENT ON COLUMN @extschema@.tb_work_queue.execute_asynchronously IS 'Indicates how this action should be executed';
 COMMENT ON COLUMN @extschema@.tb_work_queue.session_values IS 'Copy of the session values from the event queue';
+COMMENT ON COLUMN @extschema@.tb_work_queue.failed IS 'Indicates that this item has been dequeued but failed to execute due to a problem with the API endpoint or the query itself.';
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance

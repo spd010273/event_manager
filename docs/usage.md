@@ -61,7 +61,7 @@ INNER JOIN event_manager.tb_event_table et
        AND ?OLD.foobar?::TEXT IS DISTINCT FROM ?NEW.foobar?
 ```
 
-Some guidelines to work queries:
+Some guidelines to work item queries:
 
 * Parameters are bound in using a regular expression in the form of \?key\? or [?]key[?]
 * Typecasting is strongly recommended, as translating from JSONB types to SQL types is best-effort (in PostgreSQL).
@@ -124,6 +124,8 @@ Some notes about the various modes:
 ## The Queues
 
 There exist two queues within this extension, tb_event_queue, and tb_work_queue. All of the columns within each queue forms the possible arguments for the query or action that executes from that queue. JSON formatted arguments are expected to be an object (key-value pairs), where the keys are named bind points within the queries and values are what is substituted within those bindpoints.
+
+Queue items that have been attempted, but failed, will me marked as such. These items will not be retried, and will eventually collect at the bottom of the queue.
 
 # The Event Queue
 
