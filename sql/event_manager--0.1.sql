@@ -250,6 +250,7 @@ ALTER TABLE @extschema@.tb_event_queue
     ADD COLUMN old JSONB,
     ADD COLUMN new JSONB,
     ADD COLUMN session_values JSONB,
+    ADD COLUMN failed BOOLEAN NOT NULL DEFAULT FALSE,
     ADD CONSTRAINT op_check CHECK ( ( op IN( 'D', 'U', 'I' ) ) );
 
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_queue', '' );
@@ -289,7 +290,8 @@ ALTER TABLE @extschema@.tb_work_queue
     ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     ADD COLUMN transaction_label VARCHAR,
     ADD COLUMN execute_asynchronously  BOOLEAN DEFAULT @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN,
-    ADD COLUMN session_values JSONB;
+    ADD COLUMN session_values JSONB,
+    ADD COLUMN failed BOOLEAN NOT NULL DEFAULT FALSE;
 
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_work_queue', '' );
 COMMENT ON TABLE @extschema@.tb_work_queue IS 'Queue for work_item_query results. Remaining contents copied from the corresponding event_queue entry';

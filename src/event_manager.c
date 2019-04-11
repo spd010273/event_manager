@@ -297,6 +297,7 @@ void _queue_loop( struct worker * me )
     char *     listen_command  = NULL;
     PGresult * listen_result   = NULL;
     int        processed_count = 0;
+    int        dequeue_result  = 0;
 
     // Check queue prior to entering main loop
     _log(
@@ -311,9 +312,17 @@ void _queue_loop( struct worker * me )
         return;
     }
 
-    while( me->dequeue_function( me ) > 0 )
+    // Dequeue result will be -1 for error, 0 for empty queue, 1 for success
+    dequeue_result = me->dequeue_function( me );
+
+    while( dequeue_result != 0 )
     {
-        processed_count++;
+        if( dequeue_result > 0 )
+        {
+            processed_count++;
+        }
+
+        dequeue_result = me->dequeue_function( me );
     }
 
     if( processed_count > 0 )
@@ -511,6 +520,7 @@ int event_queue_handler( struct worker * me )
     PGresult * work_item_result = NULL;
     PGresult * delete_result    = NULL;
     PGresult * insert_result    = NULL;
+    PGresult * update_result    = NULL;
 
     struct query * work_item_query_obj = NULL;
 
@@ -542,7 +552,7 @@ int event_queue_handler( struct worker * me )
             "Failed to start event dequeue transaction"
         );
 
-        return 0;
+        return -1;
     }
 
     result = _execute_query(
@@ -560,7 +570,7 @@ int event_queue_handler( struct worker * me )
         );
 
         _rollback_transaction( me );
-        return 0;
+        return -1;
     }
 
     if( PQntuples( result ) <= 0 )
@@ -617,7 +627,7 @@ int event_queue_handler( struct worker * me )
         );
         _rollback_transaction( me );
         PQclear( result );
-        return 0;
+        return -1;
     }
 
     _log( LOG_LEVEL_DEBUG, "WORK ITEM QUERY: " );
@@ -639,8 +649,51 @@ int event_queue_handler( struct worker * me )
         );
 
         PQclear( result );
+        params[0] = event_table_work_item;
+        params[1] = uid;
+        params[2] = recorded;
+        params[3] = pk_value;
+        params[4] = op;
+        params[5] = old;
+        params[6] = new;
+        params[7] = session_values;
+        params[8] = ctid;
         _rollback_transaction( me );
-        return 0;
+        // XXX There is a small race condition here - this item ~may~ be picked up by another worker
+        // as the transaction is aborted, and we've explicitly rolled it back
+        if( _begin_transaction( me ) )
+        {
+            update_result = _execute_query(
+                me,
+                ( char * ) update_event_queue_item_failed,
+                params,
+                9
+            );
+
+            if( update_result != NULL && _commit_transaction( me ) )
+            {
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "Successfully marked event item as failed"
+                );
+            }
+            else
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Failed to mark failed event item"
+                );
+            }
+        }
+        else
+        {
+            _log(
+                LOG_LEVEL_WARNING,
+                "Failed to begin transaction for failure marking of event item"
+            );
+        }
+
+        return -1;
     }
 
     params[1] = uid;
@@ -671,7 +724,7 @@ int event_queue_handler( struct worker * me )
 
             PQclear( result );
             _rollback_transaction( me );
-            return 0;
+            return -1;
         }
 
         PQclear( insert_result );
@@ -708,7 +761,7 @@ int event_queue_handler( struct worker * me )
             "Failed to dequeue event queue item"
         );
         _rollback_transaction( me );
-        return 0;
+        return -1;
     }
 
     PQclear( delete_result );
@@ -720,7 +773,7 @@ int event_queue_handler( struct worker * me )
             "Failed to commit event queue transaction"
         );
 
-        return 0;
+        return -1;
     }
 
     return 1;
@@ -749,6 +802,7 @@ int work_queue_handler( struct worker * me )
 {
     PGresult * result        = NULL;
     PGresult * delete_result = NULL;
+    PGresult * update_result = NULL;
 
     bool   action_result = false;
     int    row_count     = 0;
@@ -767,7 +821,7 @@ int work_queue_handler( struct worker * me )
             LOG_LEVEL_ERROR,
             "Failed to start transaction"
         );
-        return 0;
+        return -1;
     }
 
     result = _execute_query(
@@ -785,7 +839,7 @@ int work_queue_handler( struct worker * me )
         );
 
         _rollback_transaction( me );
-        return 0;
+        return -1;
     }
 
     /* Handle action execution */
@@ -820,7 +874,40 @@ int work_queue_handler( struct worker * me )
         {
             PQclear( result );
             _rollback_transaction( me );
-            return 0;
+
+            if( _begin_transaction( me ) )
+            {
+                update_result = _execute_query(
+                    me,
+                    ( char * ) update_work_queue_item_failed,
+                    params,
+                    7
+                );
+
+                if( update_result != NULL && _commit_transaction( me ) )
+                {
+                    _log(
+                        LOG_LEVEL_DEBUG,
+                        "Marked work queue item as failed"
+                    );
+                }
+                else
+                {
+                    _log(
+                        LOG_LEVEL_WARNING,
+                        "Failed to mark work queue item as failed"
+                    );
+                }
+            }
+            else
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Failed to start transaction for marking work queue item as failed"
+                );
+            }
+
+            return -1;
         }
 
         /* Flush queue item */
@@ -840,7 +927,7 @@ int work_queue_handler( struct worker * me )
 
             PQclear( result );
             _rollback_transaction( me );
-            return 0;
+            return -1;
         }
 
         PQclear( delete_result );
