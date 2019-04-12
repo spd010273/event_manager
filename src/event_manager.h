@@ -50,7 +50,7 @@
 
 // Timeout for both curl connections and request duration
 #define TIMEOUT_RETRY_LIMIT 1L
-#define CURL_TIMEOUT 10L
+#define CURL_TIMEOUT 600L
 #define RETRY_BACKOFF 5L
 
 // SQL States
