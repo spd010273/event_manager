@@ -37,4 +37,4 @@ extern void _debug_struct( struct query * );
 extern jsmntok_t * json_tokenise( char *, unsigned int * );
 extern char * _add_json_parameters_to_param_list( CURL *, char *, char *, unsigned int * );
 extern void _bind_uri_arguments( char **, char *, char * );
-#endif
+#endif // QUERY_HELPER_H

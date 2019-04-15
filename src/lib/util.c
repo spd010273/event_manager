@@ -414,6 +414,38 @@ void free_worker( struct worker * worker )
     return;
 }
 
+// Releases the file handle for the log once a HUP happens
+bool logrotate( struct worker * me )
+{
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    if( me->type != WORKER_TYPE_PARENT )
+    {
+        return false;
+    }
+
+    if( log_file == NULL )
+    {
+        return false;
+    }
+
+    fclose( log_file );
+    log_file = NULL;
+
+
+    log_file = fopen( LOG_FILE_NAME, "a" );
+
+    if( log_file == NULL )
+    {
+        return false;
+    }
+
+    return true;
+}
+
 /*
  *  bool parent_init( void )
  *      Initial special (initial) call to new_worker for parent process,
@@ -453,7 +485,7 @@ bool parent_init( int argc, char ** argv )
             return false;
         }
 
-        log_file = fopen( LOG_FILE_NAME, "w" );
+        log_file = fopen( LOG_FILE_NAME, "a" );
 
         if( log_file == NULL )
         {
@@ -1117,6 +1149,7 @@ bool _begin_transaction( struct worker * me )
             "Failed to start transaction: %s",
             PQerrorMessage( me->conn )
         );
+
         PQclear( result );
         return false;
     }
@@ -1187,6 +1220,12 @@ void __sighup( int sig )
         );
 
         got_sighup = true;
+
+        if( logrotate( me ) == false )
+        {
+            _log( LOG_LEVEL_ERROR, "log rotation failed" );
+        }
+
         // spread sighup to all workers so they can join the party
         for( i = 0; i < ( work_jobs + event_jobs ); i++ )
         {

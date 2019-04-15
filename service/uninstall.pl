@@ -29,6 +29,7 @@ Readonly my $START_FILE_NAME     => 'event_manager-startup.sh';
 Readonly my $STOP_FILE_NAME      => 'event_manager-shutdown.sh';
 Readonly my $RELOAD_FILE_NAME    => 'event_manager-reload.sh';
 Readonly my $SYSTEMD_SERVICE_DIR => '/usr/lib/systemd/system/';
+Readonly my $LOGROTATE_SCRIPT    => '/etc/logrotate.d/event_manager';
 
 if( $EFFECTIVE_USER_ID != 0 )
 {
@@ -57,6 +58,11 @@ if( -e "${SYSTEMD_SERVICE_DIR}event_manager.service" )
     unless( unlink( "${SH_TARGET_DIR}${RELOAD_FILE_NAME}" ) )
     {
         croak "Failed to remove reload script";
+    }
+
+    if( -e "${LOGROTATE_SCRIPT}" && !unlink( "${LOGROTATE_SCRIPT}" ) )
+    {
+        croak "Failed to remove logrotate script";
     }
 
     system( 'systemctl daemon-reload' );

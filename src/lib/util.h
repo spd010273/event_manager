@@ -123,6 +123,7 @@ struct em_stat {
     double       tx_duration;
 };
 
+// Global variables
 unsigned int event_jobs;
 unsigned int work_jobs;
 
@@ -142,6 +143,7 @@ void _parse_args( int, char ** );
 void _usage( char * ) __attribute__ ((noreturn));
 void _log( char *, char *, ... ) __attribute__ ((format (gnu_printf, 2, 3)));
 
+// Functions
 struct worker * new_worker(
     unsigned short,
     unsigned int,
@@ -154,6 +156,7 @@ struct worker * new_worker(
 void free_worker( struct worker * worker );
 
 struct worker * get_worker_by_pid( void );
+bool logrotate( struct worker * );
 bool parent_init( int, char ** );
 void * create_shared_memory( size_t );
 void _manage_children( void (*function)( void * ) );

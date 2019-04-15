@@ -37,6 +37,7 @@ Readonly my $STOP_FILE_NAME      => 'event_manager-shutdown.sh';
 Readonly my $RELOAD_FILE_NAME    => 'event_manager-reload.sh';
 Readonly my $SH_TARGET_DIR       => '/usr/bin/';
 Readonly my $SYSTEMD_SERVICE_DIR => '/usr/lib/systemd/system/';
+Readonly my $LOGROTATE_DEST      => '/etc/logrotate.d/event_manager';
 Readonly my $GIT_INIT_COMMAND    => 'git submodule update --init --recursive';
 
 Readonly my $START_SH => <<BASH;
@@ -432,6 +433,11 @@ my $result = system( "systemd-analyze verify ${SYSTEMD_SERVICE_DIR}/event_manage
 if( $result )
 {
     croak "Service installation failed";
+}
+
+unless( copy( "${install_dir}/service/templates/event_manager.logrotate", $LOGROTATE_DEST ) )
+{
+    croak "Failed to setup logrotation: $OS_ERROR";
 }
 
 system( 'systemctl daemon-reload' );

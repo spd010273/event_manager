@@ -50,7 +50,8 @@
 
 // Timeout for both curl connections and request duration
 #define TIMEOUT_RETRY_LIMIT 1L
-#define CURL_TIMEOUT 600L
+#define CURL_TIMEOUT 600L // 5 minutes for request to complete
+#define CURL_CONNECT_TIMEOUT 5L // 5 Secs for connection
 #define RETRY_BACKOFF 5L
 
 // SQL States
@@ -100,10 +101,10 @@ void set_session_gucs( struct worker *, char * );
 void clear_session_gucs( struct worker *, char * );
 void _set_application_name( struct worker * );
 bool _get_advisory_lock( struct worker * );
-
+bool db_connect( struct worker * );
 // Integration functions
 void _cyanaudit_integration( struct worker *, char * );
 
 // Program Entry
 int main( int, char ** );
-#endif
+#endif // EVENT_MANAGER_H

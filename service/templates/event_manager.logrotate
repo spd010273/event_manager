@@ -1,0 +1,13 @@
+/var/log/event_manager/event_manager.log {
+    missingok
+    compress
+    copytruncate
+    notifempty
+    sharedscripts
+    nodateext
+    daily
+    rotate 7
+    postrotate
+        /bin/systemctl reload event_manager.service > /dev/null 2> /dev/null || true
+    endscript
+}

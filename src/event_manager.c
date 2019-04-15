@@ -58,19 +58,10 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
 
     if( me->conn == NULL )
     {
-        if( me->tx_in_progress )
+        if( !db_connect( me ) )
         {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Connection handle empty in transaction"
-            );
+            _log( LOG_LEVEL_ERROR, "Failed to reconnect" );
             return NULL;
-        }
-
-        me->conn = PQconnectdb( conninfo );
-        if( !_get_advisory_lock( me ) )
-        {
-            _log( LOG_LEVEL_WARNING, "Failed to obtaine advisory PID lock" );
         }
     }
 
@@ -140,15 +131,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         }
 
         sleep( last_backoff_time );
-        me->conn = PQconnectdb( conninfo );
-        if( me->conn != NULL )
-        {
-            _set_application_name( me ); // May fail if we haven't connected
-            if( !_get_advisory_lock( me ) )
-            {
-                _log( LOG_LEVEL_WARNING, "Failed to obtained advisory PID lock" );
-            }
-        }
+        db_connect( me );
     }
 
     _log(
@@ -1355,7 +1338,7 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
     response = curl_easy_setopt( me->curl_handle, CURLOPT_URL,            remote_call              );
     response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEFUNCTION,  _curl_write_callback     );
     response = curl_easy_setopt( me->curl_handle, CURLOPT_WRITEDATA,      ( void * ) &write_buffer );
-    response = curl_easy_setopt( me->curl_handle, CURLOPT_CONNECTTIMEOUT, CURL_TIMEOUT             );
+    response = curl_easy_setopt( me->curl_handle, CURLOPT_CONNECTTIMEOUT, CURL_CONNECT_TIMEOUT     );
     response = curl_easy_setopt( me->curl_handle, CURLOPT_TIMEOUT,        CURL_TIMEOUT             );
 
 #ifdef DEBUG
@@ -2120,7 +2103,7 @@ void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
     {
         if( me->conn == NULL )
         {
-            me->conn = PQconnectdb( conninfo );
+            db_connect( me );
         }
 
         snprintf( tx_success_buff, 64, "%u", stats[0]->tx_success );
@@ -2170,7 +2153,7 @@ void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
     {
         if( me->conn == NULL )
         {
-            me->conn = PQconnectdb( conninfo );
+            db_connect( me );
         }
 
         snprintf( tx_success_buff, 64, "%u", stats[1]->tx_success );
@@ -2689,6 +2672,11 @@ void _queue_loop_wrapper( void * data )
     me->status = STATUS_WORKING;
     while( 1 )
     {
+        if( me->conn == NULL )
+        {
+            db_connect( me );
+        }
+
         _queue_loop( me );
         _log(
             LOG_LEVEL_WARNING,
@@ -2883,3 +2871,45 @@ bool _get_advisory_lock( struct worker * me )
     return false;
 }
 
+bool db_connect( struct worker * me )
+{
+    if( me->conn != NULL )
+    {
+        if( PQstatus( me->conn ) != CONNECTION_OK )
+        {
+            me->conn           = NULL;
+            me->tx_in_progress = false;
+        }
+        else
+        {
+            return true;
+        }
+    }
+
+    me->conn = PQconnectdb( conninfo );
+
+    if( me->conn == NULL )
+    {
+        return false;
+    }
+
+    if( PQstatus( me->conn ) != CONNECTION_OK )
+    {
+        return false;
+    }
+
+    _get_advisory_lock( me );
+    _set_application_name ( me );
+
+    if( me->tx_in_progress )
+    {
+        me->tx_in_progress = false;
+        _log(
+            LOG_LEVEL_WARNING,
+            "Reconnected to database while in a tranasction.\n\
+            the transaction was automatically aborted"
+        );
+    }
+
+    return true;
+}
