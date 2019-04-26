@@ -304,6 +304,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
             "Query failed with state %s",
             last_sql_state
         );
+
     }
     else
     {
@@ -1645,7 +1646,8 @@ bool execute_action_query( struct worker * me, struct action_result * action )
             LOG_LEVEL_ERROR,
             "Failed to perform action query"
         );
-
+        
+        _rollback_transaction( me );
         return false;
     }
 
