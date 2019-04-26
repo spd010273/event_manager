@@ -391,11 +391,12 @@ void free_worker( struct worker * worker )
         return;
     }
 
-    if( worker->conn != NULL )
+    if( worker->conn != NULL && PQstatus( worker->conn ) == CONNECTION_OK )
     {
         if( worker->tx_in_progress )
         {
-            _rollback_transaction( worker );
+            PQexec( worker->conn, "ROLLBACK" );
+            worker->tx_in_progress = false;
         }
 
         PQfinish( worker->conn );
@@ -1004,162 +1005,6 @@ bool __test_and_set( struct worker * me )
     return initial;
 }
 
-/*
- * bool _rollback_transaction( struct worker * )
- *     rolls back a SQL transaction
- *
- * Arguments:
- *     struct worker * me: PID slot of the process rolling the transaction back
- * Return:
- *     bool is_success: true indicates the transaction was successfully rolled back
- * Error Conditions:
- *     Emits error on failure to rollback transaction
- */
-bool _rollback_transaction( struct worker * me )
-{
-    PGresult * result   = NULL;
-
-    if( !( me->tx_in_progress ) )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempted to issue ROLLBACK when no transaction was in progress"
-        );
-        return false;
-    }
-
-    result = PQexec(
-        me->conn,
-        "ROLLBACK"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to rollback transaction: %s",
-            PQerrorMessage( me->conn )
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    me->tx_in_progress = false;
-    _update_stats(
-        me,
-        0,
-        1,
-        difftime( time( NULL ), me->tx_start )
-    );
-
-    me->tx_start = 0;
-    return true;
-}
-
-/*
- * bool _commit_transaction( struct worker * )
- *     Commits a SQL transaction.
- *
- * Arguments:
- *    struct worker * me: PID slot of process commiting the transaction
- * Return:
- *    bool is_success: true indicates that the transaction was successfully
- *                     committed.
- * Error Conditions:
- *    Emits error on failure to commit transaction.
- */
-bool _commit_transaction( struct worker * me )
-{
-    PGresult * result = NULL;
-
-    if( !( me->tx_in_progress ) )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempted to issue COMMIT when not transaction was in progress"
-        );
-        return false;
-    }
-
-    result = PQexec(
-        me->conn,
-        "COMMIT"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to commit transaction %s",
-            PQerrorMessage( me->conn )
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    me->tx_in_progress = false;
-
-    _update_stats(
-        me,
-        1,
-        0,
-        difftime( time( NULL ), me->tx_start )
-    );
-
-    me->tx_start = 0;
-
-    return true;
-}
-
-/*
- * bool _begin_transaction( struct worker * )
- *     Begins a SQL transaction, sets the global tx state flag in the process.
- *
- * Arguments:
- *     struct worker * me: PID slot of the process starting the transaction
- * Return:
- *     bool is_success: Indicates that the transaction was successfully begun.
- * Error Conditions:
- *     Emits error on failure to start transaction (one is already in progress.)
- */
-bool _begin_transaction( struct worker * me )
-{
-    PGresult * result = NULL;
-
-    if( me->tx_in_progress )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempt to issue BEGIN when a transaction is already in progress"
-        );
-        return false;
-    }
-
-    result = PQexec(
-        me->conn,
-        "BEGIN"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to start transaction: %s",
-            PQerrorMessage( me->conn )
-        );
-
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    me->tx_in_progress = true;
-    me->tx_start = time( NULL );
-    return true;
-}
-
 // Signal Handlers
 
 /*
@@ -1313,7 +1158,11 @@ void __sighup( int sig )
 
     if( me->tx_in_progress )
     {
-        _rollback_transaction( me );
+        if( me->conn != NULL && PQstatus( me->conn ) == CONNECTION_OK )
+        {
+            PQexec( me->conn, "ROLLBACK" );
+            me->tx_in_progress = false;
+        }
     }
 
     /*
@@ -1322,7 +1171,11 @@ void __sighup( int sig )
      *  in the process such that we get the latest value of our GUCs for tasks
      *  such as get_uid / set_uid and REST calls
      */
-    PQfinish( me->conn );
+    if( me->conn != NULL )
+    {
+        PQfinish( me->conn );
+    }
+
     me->conn           = NULL;
     me->tx_in_progress = false;
 
@@ -1403,11 +1256,12 @@ void __term( void )
             exit(0);
         }
 
-        if( me->conn != NULL )
+        if( me->conn != NULL && PQstatus( me->conn ) == CONNECTION_OK )
         {
             if( me->tx_in_progress )
             {
-                _rollback_transaction( me );
+                PQexec( me->conn, "ROLLBACK" );
+                me->tx_in_progress = false; 
             }
 
             PQfinish( me->conn );

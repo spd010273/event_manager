@@ -166,10 +166,6 @@ void __sigint( int ) __attribute__ ((noreturn));
 void __sighup( int );
 void __term( void ) __attribute__ ((noreturn));
 
-bool _rollback_transaction( struct worker * );
-bool _commit_transaction( struct worker * );
-bool _begin_transaction( struct worker * );
-
 void _gather_child_stats_to_self( struct em_stat ** );
 void _update_stats(
     struct worker *,

@@ -44,12 +44,12 @@ bool   enable_stats        = false;
 
 PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
 {
-    PGresult * result                      = NULL;
-    int        retry_counter               = 0;
-    int        last_backoff_time           = 0;
-    char *     last_sql_state              = NULL;
-    char *     temp_last_sql_state         = NULL;
-    int        i = 0;
+    PGresult *   result              = NULL;
+    char *       last_sql_state      = NULL;
+    char *       temp_last_sql_state = NULL;
+    unsigned int retry_counter       = 0;
+    unsigned int last_backoff_time   = 1;
+    unsigned int i                   = 0;
 
     if( me == NULL )
     {
@@ -150,10 +150,65 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
                      last_sql_state,
                      SQL_STATE_CANCELED_BY_ADMINISTRATOR
                  ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_CONNECTION_FAILURE
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_CONNECTION_DOES_NOT_EXIST
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_CONNECTION_EXCEPTION
+                 ) == 0
              )
           && retry_counter < MAX_CONN_RETRIES
          )
     {
+        /* Handle case where we passed the first connection check but the connection
+         * was interrupted mid-transaction. In this case, our transaction is aborted
+         * but we still want to re-establish a connection
+         */
+        if(
+               last_sql_state != NULL
+            && (
+                  strcmp(
+                     last_sql_state,
+                     SQL_STATE_CONNECTION_FAILURE
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_CONNECTION_DOES_NOT_EXIST
+                 ) == 0
+              || strcmp(
+                     last_sql_state,
+                     SQL_STATE_CONNECTION_EXCEPTION
+                 ) == 0
+               )
+          )
+        {
+            // Connection interrupted
+            if( me->tx_in_progress == true )
+            {
+                me->tx_in_progress = false;
+            }
+
+            me->conn = NULL;
+            db_connect( me );
+
+            last_backoff_time = 1;
+            return NULL;
+        }
+
         if( params == NULL )
         {
             result = PQexec( me->conn, query );
@@ -192,6 +247,12 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
                 PG_DIAG_SQLSTATE
             );
 
+            if( last_sql_state != NULL )
+            {
+                free( last_sql_state );
+                last_sql_state = NULL;
+            }
+      
             last_sql_state = ( char * ) calloc(
                 sizeof( char ),
                 strlen( temp_last_sql_state ) + 1
@@ -213,6 +274,9 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
             }
 
             retry_counter++;
+            sleep( last_backoff_time );
+            last_backoff_time = (int) ( 10 * ( ( double ) rand() / ( double ) RAND_MAX ) )
+                              + last_backoff_time;
         }
         else
         {
@@ -535,6 +599,11 @@ int event_queue_handler( struct worker * me )
             "Failed to start event dequeue transaction"
         );
 
+        if( me->tx_in_progress == true )
+        {
+            me->tx_in_progress = false;
+        }
+
         return -1;
     }
 
@@ -674,6 +743,11 @@ int event_queue_handler( struct worker * me )
                 LOG_LEVEL_WARNING,
                 "Failed to begin transaction for failure marking of event item"
             );
+
+            if( me->tx_in_progress == true )
+            {
+                me->tx_in_progress = false;
+            }
         }
 
         return -1;
@@ -804,6 +878,12 @@ int work_queue_handler( struct worker * me )
             LOG_LEVEL_ERROR,
             "Failed to start transaction"
         );
+
+        if( me->tx_in_progress == true )
+        {
+            me->tx_in_progress = false;
+        }
+
         return -1;
     }
 
@@ -888,6 +968,11 @@ int work_queue_handler( struct worker * me )
                     LOG_LEVEL_WARNING,
                     "Failed to start transaction for marking work queue item as failed"
                 );
+                
+                if( me->tx_in_progress == true )
+                {
+                    me->tx_in_progress = false;
+                }
             }
 
             return -1;
@@ -2679,7 +2764,7 @@ void _queue_loop_wrapper( void * data )
 
         _queue_loop( me );
         _log(
-            LOG_LEVEL_WARNING,
+            LOG_LEVEL_DEBUG,
             "Child escaped from main loop"
         );
 
@@ -2873,6 +2958,9 @@ bool _get_advisory_lock( struct worker * me )
 
 bool db_connect( struct worker * me )
 {
+    unsigned short retry_counter     = 0;
+    unsigned int   last_backoff_time = 0;
+
     if( me->conn != NULL )
     {
         if( PQstatus( me->conn ) != CONNECTION_OK )
@@ -2888,28 +2976,237 @@ bool db_connect( struct worker * me )
 
     me->conn = PQconnectdb( conninfo );
 
-    if( me->conn == NULL )
+    while(
+              me->conn != NULL
+           && PQstatus( me->conn ) != CONNECTION_OK
+           && retry_counter < MAX_CONN_RETRIES
+         )
+    {
+        sleep( last_backoff_time );
+        last_backoff_time = (unsigned int) ( 10 * ( ( double ) rand() / ( double ) RAND_MAX ) )
+                          + last_backoff_time;
+        me->conn = NULL;
+        me->conn = PQconnectdb( conninfo );
+        retry_counter++;
+    }
+
+    if( me->conn != NULL && PQstatus( me->conn  ) == CONNECTION_OK )
+    {
+        _get_advisory_lock( me );
+        _set_application_name ( me );
+
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * bool _begin_transaction( struct worker * )
+ *     Begins a SQL transaction, sets the global tx state flag in the process.
+ *
+ * Arguments:
+ *     struct worker * me: PID slot of the process starting the transaction
+ * Return:
+ *     bool is_success: Indicates that the transaction was successfully begun.
+ * Error Conditions:
+ *     Emits error on failure to start transaction (one is already in progress.)
+ */
+bool _begin_transaction( struct worker * me )
+{
+    PGresult * result = NULL;
+
+    if( me == NULL )
     {
         return false;
     }
-
-    if( PQstatus( me->conn ) != CONNECTION_OK )
-    {
-        return false;
-    }
-
-    _get_advisory_lock( me );
-    _set_application_name ( me );
 
     if( me->tx_in_progress )
     {
-        me->tx_in_progress = false;
         _log(
-            LOG_LEVEL_WARNING,
-            "Reconnected to database while in a tranasction.\n\
-            the transaction was automatically aborted"
+            LOG_LEVEL_ERROR,
+            "Attempt to issue BEGIN when a transaction is already in progress"
         );
+        return false;
     }
 
+    if( !db_connect( me ) )
+    {
+        return false;
+    }
+
+    result = PQexec(
+        me->conn,
+        "BEGIN"
+    );
+
+    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to start transaction: %s",
+            PQerrorMessage( me->conn )
+        );
+
+        PQclear( result );
+        return false;
+    }
+
+    PQclear( result );
+    me->tx_in_progress = true;
+    me->tx_start = time( NULL );
+    return true;
+}
+
+/*
+ * bool _commit_transaction( struct worker * )
+ *     Commits a SQL transaction.
+ *
+ * Arguments:
+ *    struct worker * me: PID slot of process commiting the transaction
+ * Return:
+ *    bool is_success: true indicates that the transaction was successfully
+ *                     committed.
+ * Error Conditions:
+ *    Emits error on failure to commit transaction.
+ */
+bool _commit_transaction( struct worker * me )
+{
+    PGresult * result = NULL;
+    
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    if( !( me->tx_in_progress ) )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Attempted to issue COMMIT when not transaction was in progress"
+        );
+        return false;
+    }
+
+    if( !db_connect( me ) )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Failed to extablish database connection. All in-progress "\
+            "transactions in this process were automatically aborted"
+        );
+        return false;
+    }
+
+    if( me->tx_in_progress == false )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Conenction to database was interrupted before it could be committed."\
+            "The transaction was automatically aborted."
+        );
+        return false;
+    }
+
+    result = PQexec(
+        me->conn,
+        "COMMIT"
+    );
+
+    // Transaction will be either successfully commited or enter an aborted state
+    // Regardless, it is completed    
+    me->tx_in_progress = false;
+
+    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to commit transaction %s",
+            PQerrorMessage( me->conn )
+        );
+        PQclear( result );
+        return false;
+    }
+
+    PQclear( result );
+
+    _update_stats(
+        me,
+        1,
+        0,
+        difftime( time( NULL ), me->tx_start )
+    );
+
+    me->tx_start = 0;
+
+    return true;
+}
+
+/*
+ * bool _rollback_transaction( struct worker * )
+ *     rolls back a SQL transaction
+ *
+ * Arguments:
+ *     struct worker * me: PID slot of the process rolling the transaction back
+ * Return:
+ *     bool is_success: true indicates the transaction was successfully rolled back
+ * Error Conditions:
+ *     Emits error on failure to rollback transaction
+ */
+bool _rollback_transaction( struct worker * me )
+{
+    PGresult * result = NULL;
+    
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    if( !( me->tx_in_progress ) )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Attempted to issue ROLLBACK when no transaction was in progress"
+        );
+        return false;
+    }
+
+    if( !db_connect( me ) )
+    {
+        return false;
+    }
+
+    if( me->tx_in_progress == false )
+    {
+        return false;
+    }
+
+    result = PQexec(
+        me->conn,
+        "ROLLBACK"
+    );
+
+    me->tx_in_progress = false;
+    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to rollback transaction: %s",
+            PQerrorMessage( me->conn )
+        );
+        PQclear( result );
+        return false;
+    }
+
+    PQclear( result );
+
+    _update_stats(
+        me,
+        0,
+        1,
+        difftime( time( NULL ), me->tx_start )
+    );
+
+    me->tx_start = 0;
     return true;
 }
