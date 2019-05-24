@@ -96,7 +96,6 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
                 PQerrorMessage( me->conn )
             );
 
-            me->tx_in_progress = false;
             return NULL;
         }
 
@@ -323,6 +322,261 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
     }
 
     return NULL;
+}
+
+bool db_connect( struct worker * me )
+{
+    unsigned short retry_counter     = 0;
+    unsigned int   last_backoff_time = 0;
+
+    if( me->conn != NULL )
+    {
+        if( PQstatus( me->conn ) != CONNECTION_OK )
+        {
+            me->conn           = NULL;
+            me->tx_in_progress = false;
+        }
+        else
+        {
+            return true;
+        }
+    }
+
+    me->conn = PQconnectdb( conninfo );
+
+    while(
+              me->conn != NULL
+           && PQstatus( me->conn ) != CONNECTION_OK
+           && retry_counter < MAX_CONN_RETRIES
+         )
+    {
+        sleep( last_backoff_time );
+        last_backoff_time = (unsigned int) ( 10 * ( ( double ) rand() / ( double ) RAND_MAX ) )
+                          + last_backoff_time;
+        me->conn = NULL;
+        me->conn = PQconnectdb( conninfo );
+        retry_counter++;
+    }
+
+    if( me->conn != NULL && PQstatus( me->conn  ) == CONNECTION_OK )
+    {
+        _get_advisory_lock( me );
+        _set_application_name ( me );
+
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * bool _begin_transaction( struct worker * )
+ *     Begins a SQL transaction, sets the global tx state flag in the process.
+ *
+ * Arguments:
+ *     struct worker * me: PID slot of the process starting the transaction
+ * Return:
+ *     bool is_success: Indicates that the transaction was successfully begun.
+ * Error Conditions:
+ *     Emits error on failure to start transaction (one is already in progress.)
+ */
+bool _begin_transaction( struct worker * me )
+{
+    PGresult * result = NULL;
+
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    if( me->tx_in_progress )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Attempt to issue BEGIN when a transaction is already in progress"
+        );
+        return false;
+    }
+
+    if( !db_connect( me ) )
+    {
+        return false;
+    }
+
+    result = PQexec(
+        me->conn,
+        "BEGIN"
+    );
+
+    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to start transaction: %s",
+            PQerrorMessage( me->conn )
+        );
+
+        PQclear( result );
+        return false;
+    }
+
+    PQclear( result );
+    me->tx_in_progress = true;
+    me->tx_start = time( NULL );
+    return true;
+}
+
+/*
+ * bool _commit_transaction( struct worker * )
+ *     Commits a SQL transaction.
+ *
+ * Arguments:
+ *    struct worker * me: PID slot of process commiting the transaction
+ * Return:
+ *    bool is_success: true indicates that the transaction was successfully
+ *                     committed.
+ * Error Conditions:
+ *    Emits error on failure to commit transaction.
+ */
+bool _commit_transaction( struct worker * me )
+{
+    PGresult * result = NULL;
+    
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    if( !( me->tx_in_progress ) )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Attempted to issue COMMIT when not transaction was in progress"
+        );
+        return false;
+    }
+
+    if( !db_connect( me ) )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Failed to extablish database connection. All in-progress "\
+            "transactions in this process were automatically aborted"
+        );
+        return false;
+    }
+
+    if( me->tx_in_progress == false )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Conenction to database was interrupted before it could be committed."\
+            "The transaction was automatically aborted."
+        );
+        return false;
+    }
+
+    result = PQexec(
+        me->conn,
+        "COMMIT"
+    );
+
+    // Transaction will be either successfully commited or enter an aborted state
+    // Regardless, it is completed    
+    me->tx_in_progress = false;
+
+    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to commit transaction %s",
+            PQerrorMessage( me->conn )
+        );
+        PQclear( result );
+        return false;
+    }
+
+    PQclear( result );
+
+    _update_stats(
+        me,
+        1,
+        0,
+        difftime( time( NULL ), me->tx_start )
+    );
+
+    me->tx_start = 0;
+
+    return true;
+}
+
+/*
+ * bool _rollback_transaction( struct worker * )
+ *     rolls back a SQL transaction
+ *
+ * Arguments:
+ *     struct worker * me: PID slot of the process rolling the transaction back
+ * Return:
+ *     bool is_success: true indicates the transaction was successfully rolled back
+ * Error Conditions:
+ *     Emits error on failure to rollback transaction
+ */
+bool _rollback_transaction( struct worker * me )
+{
+    PGresult * result = NULL;
+    
+    if( me == NULL )
+    {
+        return false;
+    }
+
+    if( !( me->tx_in_progress ) )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Attempted to issue ROLLBACK when no transaction was in progress"
+        );
+        return false;
+    }
+
+    if( !db_connect( me ) )
+    {
+        return false;
+    }
+
+    if( me->tx_in_progress == false )
+    {
+        return false;
+    }
+
+    result = PQexec(
+        me->conn,
+        "ROLLBACK"
+    );
+
+    me->tx_in_progress = false;
+    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to rollback transaction: %s",
+            PQerrorMessage( me->conn )
+        );
+        PQclear( result );
+        return false;
+    }
+
+    PQclear( result );
+
+    _update_stats(
+        me,
+        0,
+        1,
+        difftime( time( NULL ), me->tx_start )
+    );
+
+    me->tx_start = 0;
+    return true;
 }
 
 /*
@@ -1361,8 +1615,8 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
     }
 
     // Initialize buffer
-    write_buffer.pointer = malloc( 1 );
-
+    write_buffer.pointer = calloc( 1, sizeof( char ) );
+    
     if( write_buffer.pointer == NULL )
     {
         //Really? You dont have 1 byte?
@@ -2956,259 +3210,4 @@ bool _get_advisory_lock( struct worker * me )
 
     PQclear( result );
     return false;
-}
-
-bool db_connect( struct worker * me )
-{
-    unsigned short retry_counter     = 0;
-    unsigned int   last_backoff_time = 0;
-
-    if( me->conn != NULL )
-    {
-        if( PQstatus( me->conn ) != CONNECTION_OK )
-        {
-            me->conn           = NULL;
-            me->tx_in_progress = false;
-        }
-        else
-        {
-            return true;
-        }
-    }
-
-    me->conn = PQconnectdb( conninfo );
-
-    while(
-              me->conn != NULL
-           && PQstatus( me->conn ) != CONNECTION_OK
-           && retry_counter < MAX_CONN_RETRIES
-         )
-    {
-        sleep( last_backoff_time );
-        last_backoff_time = (unsigned int) ( 10 * ( ( double ) rand() / ( double ) RAND_MAX ) )
-                          + last_backoff_time;
-        me->conn = NULL;
-        me->conn = PQconnectdb( conninfo );
-        retry_counter++;
-    }
-
-    if( me->conn != NULL && PQstatus( me->conn  ) == CONNECTION_OK )
-    {
-        _get_advisory_lock( me );
-        _set_application_name ( me );
-
-        return true;
-    }
-
-    return false;
-}
-
-/*
- * bool _begin_transaction( struct worker * )
- *     Begins a SQL transaction, sets the global tx state flag in the process.
- *
- * Arguments:
- *     struct worker * me: PID slot of the process starting the transaction
- * Return:
- *     bool is_success: Indicates that the transaction was successfully begun.
- * Error Conditions:
- *     Emits error on failure to start transaction (one is already in progress.)
- */
-bool _begin_transaction( struct worker * me )
-{
-    PGresult * result = NULL;
-
-    if( me == NULL )
-    {
-        return false;
-    }
-
-    if( me->tx_in_progress )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempt to issue BEGIN when a transaction is already in progress"
-        );
-        return false;
-    }
-
-    if( !db_connect( me ) )
-    {
-        return false;
-    }
-
-    result = PQexec(
-        me->conn,
-        "BEGIN"
-    );
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to start transaction: %s",
-            PQerrorMessage( me->conn )
-        );
-
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-    me->tx_in_progress = true;
-    me->tx_start = time( NULL );
-    return true;
-}
-
-/*
- * bool _commit_transaction( struct worker * )
- *     Commits a SQL transaction.
- *
- * Arguments:
- *    struct worker * me: PID slot of process commiting the transaction
- * Return:
- *    bool is_success: true indicates that the transaction was successfully
- *                     committed.
- * Error Conditions:
- *    Emits error on failure to commit transaction.
- */
-bool _commit_transaction( struct worker * me )
-{
-    PGresult * result = NULL;
-    
-    if( me == NULL )
-    {
-        return false;
-    }
-
-    if( !( me->tx_in_progress ) )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempted to issue COMMIT when not transaction was in progress"
-        );
-        return false;
-    }
-
-    if( !db_connect( me ) )
-    {
-        _log(
-            LOG_LEVEL_WARNING,
-            "Failed to extablish database connection. All in-progress "\
-            "transactions in this process were automatically aborted"
-        );
-        return false;
-    }
-
-    if( me->tx_in_progress == false )
-    {
-        _log(
-            LOG_LEVEL_WARNING,
-            "Conenction to database was interrupted before it could be committed."\
-            "The transaction was automatically aborted."
-        );
-        return false;
-    }
-
-    result = PQexec(
-        me->conn,
-        "COMMIT"
-    );
-
-    // Transaction will be either successfully commited or enter an aborted state
-    // Regardless, it is completed    
-    me->tx_in_progress = false;
-
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to commit transaction %s",
-            PQerrorMessage( me->conn )
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-
-    _update_stats(
-        me,
-        1,
-        0,
-        difftime( time( NULL ), me->tx_start )
-    );
-
-    me->tx_start = 0;
-
-    return true;
-}
-
-/*
- * bool _rollback_transaction( struct worker * )
- *     rolls back a SQL transaction
- *
- * Arguments:
- *     struct worker * me: PID slot of the process rolling the transaction back
- * Return:
- *     bool is_success: true indicates the transaction was successfully rolled back
- * Error Conditions:
- *     Emits error on failure to rollback transaction
- */
-bool _rollback_transaction( struct worker * me )
-{
-    PGresult * result = NULL;
-    
-    if( me == NULL )
-    {
-        return false;
-    }
-
-    if( !( me->tx_in_progress ) )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Attempted to issue ROLLBACK when no transaction was in progress"
-        );
-        return false;
-    }
-
-    if( !db_connect( me ) )
-    {
-        return false;
-    }
-
-    if( me->tx_in_progress == false )
-    {
-        return false;
-    }
-
-    result = PQexec(
-        me->conn,
-        "ROLLBACK"
-    );
-
-    me->tx_in_progress = false;
-    if( PQresultStatus( result ) != PGRES_COMMAND_OK )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to rollback transaction: %s",
-            PQerrorMessage( me->conn )
-        );
-        PQclear( result );
-        return false;
-    }
-
-    PQclear( result );
-
-    _update_stats(
-        me,
-        0,
-        1,
-        difftime( time( NULL ), me->tx_start )
-    );
-
-    me->tx_start = 0;
-    return true;
 }

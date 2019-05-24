@@ -103,42 +103,6 @@ CREATE TRIGGER tr_set_configuration
     AFTER INSERT OR UPDATE ON @extschema@.tb_setting
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_set_configuration();
 
-/* Avoid TOC errors on restore by using antijoin when creating defaults */
-WITH tt_unnest AS
-(
-    SELECT unnest(
-               ARRAY[
-                   '@extschema@.execute_asynchronously',
-                   '@extschema@.set_uid_function',
-                   '@extschema@.get_uid_function',
-                   '@extschema@.default_when_function',
-                   '@extschema@.session_gucs',
-                   '@extschema@.base_url'
-               ]::VARCHAR[]
-           ) AS key,
-           unnest(
-               ARRAY[
-                   't',
-                   'NULL',
-                   'NULL',
-                   '@extschema@.fn_dummy_when_function',
-                   '',
-                   'localhost'
-               ]::VARCHAR[]
-           ) AS value
-)
-INSERT INTO @extschema@.tb_setting
-            (
-                key,
-                value
-            )
-     SELECT tt.key,
-            tt.value
-       FROM tt_unnest tt
-  LEFT JOIN @extschema@.tb_setting s
-         ON s.key = tt.key
-      WHERE s.value IS NULL;
-
 CREATE SEQUENCE @extschema@.sq_pk_event_table;
 
 CREATE TABLE @extschema@.tb_event_table
@@ -182,10 +146,10 @@ CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;
 CREATE TABLE @extschema@.tb_event_table_work_item
 (
     event_table_work_item   INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item'),
-    source_event_table      INTEGER NOT NULL REFERENCES @extschema@.tb_event_table,
+    source_event_table      INTEGER NOT NULL,
     source_column_name      VARCHAR(63),
-    target_event_table      INTEGER REFERENCES @extschema@.tb_event_table,
-    action                  INTEGER NOT NULL REFERENCES @extschema@.tb_action,
+    target_event_table      INTEGER,
+    action                  INTEGER NOT NULL,
     label                   JSONB,
     description             JSONB,
     transaction_label       VARCHAR,
@@ -286,7 +250,7 @@ END
 ALTER TABLE @extschema@.tb_work_queue
     DROP COLUMN foo,
     ADD COLUMN parameters JSONB NOT NULL,
-    ADD COLUMN action INTEGER NOT NULL REFERENCES @extschema@.tb_action,
+    ADD COLUMN action INTEGER NOT NULL,
     ADD COLUMN uid INTEGER,
     ADD COLUMN recorded TIMESTAMP NOT NULL DEFAULT clock_timestamp(),
     ADD COLUMN transaction_label VARCHAR,
@@ -309,7 +273,7 @@ CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance
 (
     event_table_work_item_instance INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item_instance'),
-    event_table_work_item   INTEGER NOT NULL REFERENCES @extschema@.tb_event_table_work_item,
+    event_table_work_item   INTEGER NOT NULL,
     source_pk               INTEGER,
     target_pk               INTEGER,
     metadata                JSONB,

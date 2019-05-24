@@ -1,23 +1,89 @@
 DO
  $_$
+DECLARE
+    my_schema                 VARCHAR := 'event_manager';
+    my_execute_asynchronously VARCHAR := 'true';
+    my_set_uid_function       VARCHAR := 'fn_setup_entity_session( ?uid?, ?uid? )';
+    my_get_uid_function       VARCHAR := 'fn_get_session_entity()';
+    my_default_when_function  VARCHAR := 'event_maanger.fn_dummp_when_function';
+    my_session_gucs           VARCHAR := 'xerp.effective_entity,xerp.entity,event_manager.base_url';
+    my_base_url               VARCHAR := 'https://change_me/';
 BEGIN
-    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET event_manager.set_uid_function = ''fn_setup_entity_session( ?uid?, ?uid? )''';
-    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET event_manager.get_uid_function = ''fn_get_session_entity()''';
-    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET event_manager.session_gucs = ''xerp.effective_entity,xerp.entity,event_manager.base_url''';
-    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET event_manager.base_url = ''http://change_me/''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.execute_asynchronously = ''' || my_execute_asynchronously || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.default_when_function = ''' || my_default_when_function || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.set_uid_function = ''' || my_set_uid_function || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.get_uid_function = ''' || my_get_uid_function || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schmea || '.session_gucs = ''' || my_session_gucs || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.base_url = ''' || my_base_url || '''';
+
+    my_query := '
+WITH tt_data AS
+(
+    SELECT unnest(
+               ARRAY[
+                   ''execute_asynchronously'',
+                   ''default_when_function'',
+                   ''set_uid_function'',
+                   ''get_uid_function'',
+                   ''session_gucs'',
+                   ''base_url''
+               ]::VARCHAR[]
+           ) AS key,
+           unnest(
+               ARRAY[
+                   ''' || my_execute_asynchronously || ''',
+                   ''' || my_default_when_function || ''',
+                   ''' || my_set_uid_function || ''',
+                   ''' || my_get_uid_function || ''',
+                   ''' || my_session_gucs || ''',
+                   ''' || my_base_url || ''',
+               ]::VARCHAR[]
+           ) AS value
+)
+INSERT INTO ' || my_schema || '.tb_setting
+            (
+                key,
+                value
+            )
+     SELECT tt.key,
+            tt.value
+       FROM tt_data tt
+  LEFT JOIN ' || my_schema || '.tb_setting s
+         ON s.key = tt.key
+      WHERE s.value IS NULL';
+
+    EXECUTE my_query;
+
+    my_query := '
+WITH tt_data AS
+(
+    SELECT unnest(
+               ARRAY[
+                   ''execute_asynchronously'',
+                   ''default_when_function'',
+                   ''set_uid_function'',
+                   ''get_uid_function'',
+                   ''session_gucs'',
+                   ''base_url''
+               ]::VARCHAR[]
+           ) AS key,
+           unnest(
+               ARRAY[
+                   ''' || my_execute_asynchronously || ''',
+                   ''' || my_default_when_function || ''',
+                   ''' || my_set_uid_function || ''',
+                   ''' || my_get_uid_function || ''',
+                   ''' || my_session_gucs || ''',
+                   ''' || my_base_url || ''',
+               ]::VARCHAR[]
+           ) AS value
+)
+    UPDATE ' || my_schema || '.tb_settings
+       SET s.value = tt.value
+      FROM tt_data tt
+     WHERE tt.key = s.key';
+
+    EXECUTE my_query;
 END
  $_$
 LANGUAGE plpgsql;
-
-UPDATE event_manager.tb_setting
-   SET value = 'fn_setup_entity_session( ?uid?, ?uid? )'
- WHERE key = 'event_manager.set_uid_function';
-UPDATE event_manager.tb_setting
-   SET value = 'fn_get_session_entity()'
- WHERE key = 'event_manager.get_uid_function';
-UPDATE event_manager.tb_setting
-   SET value = 'xerp.effective_entity,xerp.entity,event_manager.base_url'
- WHERE key = 'event_manager.session_gucs';
-UPDATE event_manager.tb_setting
-   SET value = 'https://change_me/'
- WHERE key = 'event_manager.base_url';
