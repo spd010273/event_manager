@@ -48,6 +48,8 @@ CREATE TABLE @extschema@.tb_setting
     CHECK( key ~ '^@extschema@\.' )
 );
 
+SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_setting', '' );
+
 CREATE UNIQUE INDEX ix_unique_setting_key ON @extschema@.tb_setting( lower( key ) );
 
 CREATE FUNCTION @extschema@.fn_get_config
