@@ -10,6 +10,7 @@ COPY( SELECT * FROM event_manager.tb_event_table_work_item ) TO '/tmp/tb_event_t
 COPY( SELECT * FROM event_manager.tb_event_table_work_item_instance ) TO '/tmp/tb_event_table_work_item_instance.csv' WITH CSV HEADER;
 COPY( SELECT * FROM event_manager.tb_event_queue ) TO '/tmp/tb_event_queue.csv' WITH CSV HEADER;
 COPY( SELECT * FROM event_manager.tb_work_queue ) TO '/tmp/tb_work_queue.csv' WITH CSV HEADER;
+COPY( SELECT * FROM event_manager.tb_setting ) TO '/tmp/tb_setting.csv' WITH CSV HEADER;
 
 DROP EXTENSION event_manager CASCADE;
 CREATE EXTENSION event_manager;
@@ -20,6 +21,7 @@ COPY event_manager.tb_event_table_work_item FROM '/tmp/tb_event_table_work_item.
 COPY event_manager.tb_event_table_work_item_instance FROM '/tmp/tb_event_table_work_item_instance.csv' WITH CSV HEADER;
 COPY event_manager.tb_event_queue FROM '/tmp/tb_event_queue.csv' WITH CSV HEADER;
 COPY event_manager.tb_work_queue FROM '/tmp/tb_work_queue.csv' WITH CSV HEADER;
+COPY event_manager.tb_setting FROM '/tmp/tb_setting.csv' WITH CSV HEADER;
 
 SELECT setval('event_manager.sq_pk_event_table_work_item_instance', MAX( event_table_work_item_instance ) ) FROM event_manager.tb_event_table_work_item_instance;
 SELECT setval('event_manager.sq_pk_event_table_work_item', MAX( event_table_work_item ) ) FROM event_manager.tb_event_table_work_item;
