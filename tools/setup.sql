@@ -8,12 +8,13 @@ DECLARE
     my_default_when_function  VARCHAR := 'event_maanger.fn_dummp_when_function';
     my_session_gucs           VARCHAR := 'xerp.effective_entity,xerp.entity,event_manager.base_url';
     my_base_url               VARCHAR := 'https://change_me/';
+    my_query                  VARCHAR;
 BEGIN
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.execute_asynchronously = ''' || my_execute_asynchronously || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.default_when_function = ''' || my_default_when_function || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.set_uid_function = ''' || my_set_uid_function || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.get_uid_function = ''' || my_get_uid_function || '''';
-    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schmea || '.session_gucs = ''' || my_session_gucs || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.session_gucs = ''' || my_session_gucs || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.base_url = ''' || my_base_url || '''';
 
     my_query := '
@@ -21,12 +22,12 @@ WITH tt_data AS
 (
     SELECT unnest(
                ARRAY[
-                   ''execute_asynchronously'',
-                   ''default_when_function'',
-                   ''set_uid_function'',
-                   ''get_uid_function'',
-                   ''session_gucs'',
-                   ''base_url''
+                   ''' || my_schema || '.execute_asynchronously'',
+                   ''' || my_schema || '.default_when_function'',
+                   ''' || my_schema || '.set_uid_function'',
+                   ''' || my_schema || '.get_uid_function'',
+                   ''' || my_schema || '.session_gucs'',
+                   ''' || my_schema || '.base_url''
                ]::VARCHAR[]
            ) AS key,
            unnest(
@@ -36,7 +37,7 @@ WITH tt_data AS
                    ''' || my_set_uid_function || ''',
                    ''' || my_get_uid_function || ''',
                    ''' || my_session_gucs || ''',
-                   ''' || my_base_url || ''',
+                   ''' || my_base_url || '''
                ]::VARCHAR[]
            ) AS value
 )
@@ -59,12 +60,12 @@ WITH tt_data AS
 (
     SELECT unnest(
                ARRAY[
-                   ''execute_asynchronously'',
-                   ''default_when_function'',
-                   ''set_uid_function'',
-                   ''get_uid_function'',
-                   ''session_gucs'',
-                   ''base_url''
+                   ''' || my_schema || '.execute_asynchronously'',
+                   ''' || my_schema || '.default_when_function'',
+                   ''' || my_schema || '.set_uid_function'',
+                   ''' || my_schema || '.get_uid_function'',
+                   ''' || my_schema || '.session_gucs'',
+                   ''' || my_schema || '.base_url''
                ]::VARCHAR[]
            ) AS key,
            unnest(
@@ -74,12 +75,12 @@ WITH tt_data AS
                    ''' || my_set_uid_function || ''',
                    ''' || my_get_uid_function || ''',
                    ''' || my_session_gucs || ''',
-                   ''' || my_base_url || ''',
+                   ''' || my_base_url || '''
                ]::VARCHAR[]
            ) AS value
 )
-    UPDATE ' || my_schema || '.tb_settings
-       SET s.value = tt.value
+    UPDATE ' || my_schema || '.tb_setting s
+       SET value = tt.value
       FROM tt_data tt
      WHERE tt.key = s.key';
 
