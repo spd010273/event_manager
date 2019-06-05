@@ -5,7 +5,7 @@ DECLARE
     my_execute_asynchronously VARCHAR := 'true';
     my_set_uid_function       VARCHAR := 'fn_setup_entity_session( ?uid?, ?uid? )';
     my_get_uid_function       VARCHAR := 'fn_get_session_entity()';
-    my_default_when_function  VARCHAR := 'event_maanger.fn_dummp_when_function';
+    my_default_when_function  VARCHAR := 'event_manager.fn_dummy_when_function';
     my_session_gucs           VARCHAR := 'xerp.effective_entity,xerp.entity,event_manager.base_url';
     my_base_url               VARCHAR := 'https://change_me/';
     my_query                  VARCHAR;
