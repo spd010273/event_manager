@@ -25,7 +25,7 @@ cd event_manager
 git submodule init
 git submodule update
 make
-sudo make install
+sudo env "PATH=$PATH" make install
 ```
 Additionally, you can run the install script in the event_manager repo. This will initialize the submodule as well as install event_manager under systemd. Event manager logs to /var/log/event_manager/event_manager.log when in daemon mode (-D argument)
 ## Debian / Ubuntu
