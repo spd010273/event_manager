@@ -46,7 +46,7 @@ INNER JOIN " EXTENSION_NAME ".tb_event_table_work_item etwi \
         ON etwi.event_table_work_item = eq.event_table_work_item \
      WHERE eq.failed IS FALSE \
   ORDER BY eq.failed ASC, \
-           eq.recorded DESC \
+           eq.recorded ASC \
      LIMIT 1 \
        FOR UPDATE OF eq SKIP LOCKED";
 
@@ -101,7 +101,7 @@ INNER JOIN " EXTENSION_NAME ".tb_action a \
         ON a.action = wq.action \
      WHERE wq.failed IS FALSE \
   ORDER BY wq.failed ASC, \
-           wq.recorded DESC  \
+           wq.recorded ASC  \
      LIMIT 1 \
        FOR UPDATE OF wq SKIP LOCKED";
 
