@@ -18,4 +18,7 @@ DATA        = $(wildcard sql/$(EXTENSION)--*.sql)
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 
+check:
+	./run_tests -M -D
+
 include $(PGXS)

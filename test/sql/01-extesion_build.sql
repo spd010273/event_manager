@@ -30,7 +30,7 @@ INNER JOIN pg_extension e
                'tb_event_queue'
            )
        AND c.relkind = 'r';
-    
+
     IF my_table_count != 7 THEN
         RAISE EXCEPTION 'FAILED: Extension failed to install';
         RETURN;

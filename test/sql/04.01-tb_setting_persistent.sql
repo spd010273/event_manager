@@ -10,9 +10,9 @@ BEGIN
         RAISE EXCEPTION 'FAILED: tb_setting GUC';
         RETURN;
     END IF;
-    
+
     RAISE NOTICE 'PASSED: tb_setting GUC';
     RETURN;
 END
  $_$
-    LANGUAGE plpgsql; 
+    LANGUAGE plpgsql;

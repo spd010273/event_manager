@@ -31,6 +31,14 @@ INSERT INTO eventmanagertest.tb_b
             a.a
        FROM eventmanagertest.tb_a a;
 
+INSERT INTO event_manager.tb_setting( key, value )
+     VALUES ( 'event_manager.execute_asynchronously', 'true' ),
+            ( 'event_manager.default_when_function', 'event_manager.fn_dummy_when_function' ),
+            ( 'event_manager.set_uid_function' , 'NULL' ),
+            ( 'event_manager.get_uid_function', 'NULL' ),
+            ( 'event_manager.session_gucs', 'event_manager.base_url' ),
+            ( 'event_manager.base_url', 'https://change_me/' );
+
 DO
  $_$
 DECLARE
@@ -54,8 +62,19 @@ BEGIN
         RETURN;
     END IF;
 
+
+    SELECT COUNT(*)
+      INTO my_count
+      FROM event_manager.tb_setting;
+
+    IF( my_count = 0 ) THEN
+        RAISE EXCEPTION 'FAILED: populate event_manager.tb_setting';
+        RETURN;
+    END IF;
+
     RAISE NOTICE 'PASSED: Populate data';
     RETURN;
 END
  $_$
     LANGUAGE plpgsql;
+

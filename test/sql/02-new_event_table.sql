@@ -13,23 +13,16 @@ DO
  $_$
 BEGIN
     PERFORM *
-       FROM pg_trigger t
- INNER JOIN pg_class c
-         ON c.oid = t.tgrelid
-        AND c.relkind = 'r'
-        AND c.relname::VARCHAR = 'tb_a'
- INNER JOIN pg_namespace n
-         ON n.oid = c.relnamespace
-        AND n.nspname::VARCHAR = 'eventmanagertest'
-      WHERE t.tgname::VARCHAR = 'tr_event_enqueue';
+       FROM event_manager.tb_event_table
+      WHERE table_name = 'tb_a'
+        AND schema_name = 'eventmanagertest';
 
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'FAILED: new event table';
+    IF FOUND THEN
+        RIASE NOTICE 'PASSED: new event table';
         RETURN;
     END IF;
 
-    RAISE NOTICE 'PASSED: new event table';
-    RETURN;
+    RAISE EXCEPTION 'FAILED: new event table';
 END
  $_$
     LANGUAGE plpgsql;

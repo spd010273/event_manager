@@ -157,7 +157,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     transaction_label       VARCHAR,
     work_item_query         TEXT NOT NULL,
     when_function           VARCHAR DEFAULT @extschema@.fn_get_config( '@extschema@.default_when_function' ),
-    op                      CHAR(1)[],
+    op                      CHAR(1)[] NOT NULL,
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN, TRUE ),
     inverse_event           INTEGER,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
@@ -591,6 +591,7 @@ BEGIN
         AND application_name = 'pg_restore';
 
     IF FOUND THEN
+        RAISE DEBUG 'Database restore in progress, trigger creation disabled.';
         RETURN;
     END IF;
 
@@ -599,8 +600,8 @@ BEGIN
         WITH tt_op_expansion AS
         (
             SELECT source_event_table,
-                   unnest( regexp_split_to_array( source_column_name, ',' ) ) AS source_column_name,
-                   unnest( op ) AS op
+                   unnest( COALESCE( regexp_split_to_array( source_column_name, ',' ), '{null}'::VARCHAR[] ) ) AS source_column_name,
+                   unnest( COALESCE( op, '{null}'::VARCHAR[] ) ) AS op
               FROM @extschema@.tb_event_table_work_item
         ),
         tt_aggregate AS

@@ -10,7 +10,7 @@ BEGIN
        FROM event_manager.tb_setting
       WHERE key = 'event_manager.execute_asynchronously'
         AND value = 'false';
-    
+
     IF NOT FOUND THEN
         RAISE EXCEPTION 'FAILED: change tb_setting';
         RETURN;
@@ -34,9 +34,9 @@ BEGIN
         RAISE EXCEPTION 'FAILED: tb_setting GUC';
         RETURN;
     END IF;
-    
+
     RAISE NOTICE 'PASSED: tb_setting GUC';
     RETURN;
 END
  $_$
-    LANGUAGE plpgsql; 
+    LANGUAGE plpgsql;

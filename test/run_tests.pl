@@ -32,10 +32,15 @@ use Cwd qw( abs_path );
 use File::Temp;
 use File::Glob;
 
-Readonly my $VERSION => '0.1';
-Readonly my $TESTDIR => './test/sql/';
-Readonly my $VALGRIND_PREFIX => "valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all ";
-Readonly my $USAGE_MESSAGE => <<"USAGE";
+Readonly my $VERSION         => '0.1';
+Readonly my $TESTDIR         => './test/sql/';
+Readonly my $TEST_DATABASE   => '__em_test__';
+Readonly my $MC_POSTGRES_CS  => 'dbi:Pg:dbname=postgres;host=localhost;port=5432';
+Readonly my $MC_TEST_CS      => "dbi:Pg:dbname=$TEST_DATABASE;host=localhost;port=5432";
+Readonly my $VALGRIND_PREFIX => <<VALGRIND;
+valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all
+VALGRIND
+Readonly my $USAGE_MESSAGE   => <<"USAGE";
 Usage:
     $0 -U <username> -d <dbname> -h <hostname> -p <port>
         -U db user name (default: postgres)
@@ -60,6 +65,7 @@ my @children;
 my $use_valgrind = 0;
 my $manager_running = 0;
 my $manager_should_be_running = 0;
+our $make_check = 0;
 
 sub HELP_MESSAGE()
 {
@@ -126,7 +132,7 @@ sub run_test($) :Export(:DEFAULT)
                 $manager_should_be_running = 1;
                 unless( check_event_manager_running( 1 ) )
                 {
-                    return { result => 0, result_text => 'Event and/or Work processors not running' };
+                    return { result => 0, error_text => 'Event and/or Work processors not running' };
                 }
             }
         }
@@ -151,7 +157,16 @@ sub run_test($) :Export(:DEFAULT)
 
     print $temp_file $sql;
     my $output_file = "/tmp/eventmanagertest.txt";
-    my $command = "psql -U $username -d $dbname -p $port -h $hostname -f $filename &> $output_file 2>&1";
+    my $command = '';
+
+    if( $make_check )
+    {
+        $command = "psql -U postgres -d $TEST_DATABASE -p 5432 -h localhost -f $filename &> $output_file 2>&1";
+    }
+    else
+    {
+        $command = "psql -U $username -d $dbname -p $port -h $hostname -f $filename &> $output_file 2>&1";
+    }
 
     my $signal = system( $command );
 
@@ -161,10 +176,11 @@ sub run_test($) :Export(:DEFAULT)
     }
     else
     {
-        unless( $signal & 127 == 2 )
+        unless( $signal && 127 == 2 )
         {
             # Test had no output?
         }
+
         carp 'No output from test!';
         return;
     }
@@ -195,7 +211,7 @@ sub get_tests() :Export(:DEFAULT)
 
     unless( opendir( $dir, $TESTDIR ) )
     {
-        croak( "$1" );
+        croak( "Failed to find tests in '$TESTDIR': $OS_ERROR" );
     }
 
     my @test_files;
@@ -227,7 +243,7 @@ sub check_event_manager_running(;$)
         },
     );
 
-    system( 'ps aux | grep event_manager &> /tmp/ps_result.txt' );
+    system( 'ps aux | grep Event &> /tmp/ps_result.txt' );
 
     my $file;
     my $file_contents = '';
@@ -278,7 +294,15 @@ sub check_event_manager_running(;$)
         {
             my $log = $flag;
             $log =~ s/^-//;
-            my $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
+            my $command = '';
+            if( $make_check )
+            {
+                $command = "./event_manager -U postgres -d \"$TEST_DATABASE\" -h localhost -p 5432 $flag \&> /tmp/event_manager_${log}.log";
+            }
+            else
+            {
+                $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
+            }
 
             if( $use_valgrind )
             {
@@ -309,6 +333,8 @@ sub check_event_manager_running(;$)
             sleep( 5 );
             return 1;
         }
+
+        carp "Failed to startup event_manager";
     }
 
     return 0;
@@ -326,14 +352,15 @@ sub start_process($)
 }
 
 ## MAIN PROGRAM
-our( $opt_d, $opt_h, $opt_U, $opt_p, $opt_l, $opt_v, $opt_D, $opt_V );
-usage( 'invalid arguments' ) unless( getopts( 'd:U:p:h:lvDV' ) );
+our( $opt_d, $opt_h, $opt_U, $opt_p, $opt_l, $opt_v, $opt_D, $opt_V, $opt_M );
+usage( 'invalid arguments' ) unless( getopts( 'd:U:p:h:lvDVM' ) );
 
-$username = $opt_U;
-$port     = $opt_p;
-$hostname = $opt_h;
-$dbname   = $opt_d;
-$debug    = $opt_D;
+$username   = $opt_U;
+$port       = $opt_p;
+$hostname   = $opt_h;
+$dbname     = $opt_d;
+$debug      = $opt_D;
+$make_check = $opt_M;
 
 if( $opt_v )
 {
@@ -358,44 +385,72 @@ if( $opt_V )
     $use_valgrind = 1;
 }
 
-unless( defined $username )
+if( $make_check )
 {
-    $username = 'postgres';
-}
+    my $dbh = DBI->connect(
+        $MC_POSTGRES_CS,
+        'postgres',
+        undef
+    );
 
-unless( defined $port )
-{
-    $port = 5432;
-}
+    unless( $dbh )
+    {
+        croak 'There is no database running locally or make check could not connect';
+    }
 
-unless( defined $dbname )
-{
-    $dbname = $username;
-}
+    unless( $dbh->do( "DROP DATABASE IF EXISTS \"$TEST_DATABASE\"" ) )
+    {
+        croak "Failed to remove existing test database \"$TEST_DATABASE\"";
+    }
 
-unless( defined $hostname )
-{
-    $hostname = 'localhost';
-}
+    unless( $dbh->do( "CREATE DATABASE \"$TEST_DATABASE\"" ) )
+    {
+        croak "Failed to create test database \"$TEST_DATABASE\"";
+    }
 
-if( defined $port and ($port !~ /^\d+$/ or $port < 1 or $port > 65536 ) )
-{
-    usage( 'Invalid port' );
+    $dbh->disconnect();
 }
-
-unless( defined $dbname and length $dbname > 0 )
+else
 {
-    usage( 'Invalid dbname' );
-}
+    unless( defined $username )
+    {
+        $username = 'postgres';
+    }
 
-unless( defined $username and length $username > 0 )
-{
-    usage( 'Invalid username' );
-}
+    unless( defined $port )
+    {
+        $port = 5432;
+    }
 
-unless( defined $hostname and length $hostname > 0 )
-{
-    usage( 'Invalid hostname' );
+    unless( defined $dbname )
+    {
+        $dbname = $username;
+    }
+
+    unless( defined $hostname )
+    {
+        $hostname = 'localhost';
+    }
+
+    if( defined $port and ($port !~ /^\d+$/ or $port < 1 or $port > 65536 ) )
+    {
+        usage( 'Invalid port' );
+    }
+
+    unless( defined $dbname and length $dbname > 0 )
+    {
+        usage( 'Invalid dbname' );
+    }
+
+    unless( defined $username and length $username > 0 )
+    {
+        usage( 'Invalid username' );
+    }
+
+    unless( defined $hostname and length $hostname > 0 )
+    {
+        usage( 'Invalid hostname' );
+    }
 }
 
 my $tests = get_tests();
@@ -421,6 +476,30 @@ foreach my $test( @$tests )
     }
 }
 
+if( $make_check )
+{
+    my $dbh = DBI->connect(
+        $MC_POSTGRES_CS,
+        'postgres',
+        undef
+    );
+
+    unless( $dbh )
+    {
+        croak 'There is no database running locally or make check could not connect';
+    }
+
+    unless( $debug )
+    {
+        unless( $dbh->do( "DROP DATABASE \"$TEST_DATABASE\"") )
+        {
+            croak "Failed to remove test database \"$TEST_DATABASE\"";
+        }
+    }
+
+    $dbh->disconnect();
+}
+
 if( scalar( @children ) > 0 )
 {
     kill 'TERM', @children;
@@ -428,16 +507,16 @@ if( scalar( @children ) > 0 )
 #    kill 'KILL', @children;
 }
 
-my $result = `ps aux | grep "[e]vent_manager " | awk '{ print \$2 }'`;
+my $result = `ps aux | grep "Event Manager " | awk '{ print \$2 }'`;
 
-foreach my $pid( split( "\n", $result ) )
-{
-    chomp( $pid );
-    next unless( $pid =~ /^\d+$/ );
-    kill 'TERM', $pid;
-    sleep( 1 );
-    kill 'KILL', $pid;
-}
+#foreach my $pid( split( "\n", $result ) )
+#{
+#    chomp( $pid );
+#    next unless( $pid =~ /^\d+$/ );
+#    kill 'TERM', $pid;
+#    sleep( 1 );
+#    kill 'KILL', $pid;
+#}
 
 if( check_event_manager_running() )
 {

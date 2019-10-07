@@ -76,7 +76,7 @@ BEGIN
     PERFORM *
        FROM event_manager.tb_event_queue
       WHERE pk_value = 1002;
-    
+
     IF NOT FOUND THEN
         RAISE EXCEPTION 'FAILED: async item was processed synchronously';
         RETURN;

@@ -24,7 +24,7 @@ BEGIN
     SELECT COUNT(*)
       INTO my_count
       FROM event_manager.tb_action;
-    
+
     IF( my_count != 2 ) THEN
         RAISE EXCEPTION 'FAILED: create actions';
         RETURN;
