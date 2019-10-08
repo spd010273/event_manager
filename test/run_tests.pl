@@ -32,15 +32,20 @@ use Cwd qw( abs_path );
 use File::Temp;
 use File::Glob;
 
-Readonly my $VERSION         => '0.1';
-Readonly my $TESTDIR         => './test/sql/';
-Readonly my $TEST_DATABASE   => '__em_test__';
-Readonly my $MC_POSTGRES_CS  => 'dbi:Pg:dbname=postgres;host=localhost;port=5432';
-Readonly my $MC_TEST_CS      => "dbi:Pg:dbname=$TEST_DATABASE;host=localhost;port=5432";
-Readonly my $VALGRIND_PREFIX => <<VALGRIND;
+# make check parameters
+Readonly my $MC_PORT             => '5432';
+Readonly my $MC_USER             => 'postgres';
+Readonly my $MC_HOST             => 'localhost';
+
+Readonly my $VERSION             => '0.1';
+Readonly my $TESTDIR             => './test/sql/';
+Readonly my $TEST_DATABASE       => '__em_test__';
+Readonly my $MC_POSTGRES_CS      => "dbi:Pg:dbname=postgres;host=$MC_HOST;port=$MC_PORT";
+Readonly my $MC_TEST_CS          => "dbi:Pg:dbname=$TEST_DATABASE;host=$MC_HOST;port=$MC_PORT";
+Readonly my $VALGRIND_PREFIX     => <<VALGRIND;
 valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all
 VALGRIND
-Readonly my $USAGE_MESSAGE   => <<"USAGE";
+Readonly my $USAGE_MESSAGE       => <<"USAGE";
 Usage:
     $0 -U <username> -d <dbname> -h <hostname> -p <port>
         -U db user name (default: postgres)
@@ -52,20 +57,35 @@ Usage:
       [ -D  Debug flag (show error detail) ]
       [ -V  With Valgrind ]
 USAGE
+Readonly my $CHECK_WORKER_RUNNING => <<SQL;
+    SELECT l.objid AS worker_pid
+      FROM pg_locks l
+INNER JOIN pg_stat_activity a
+        ON a.pid = l.pid
+INNER JOIN pg_namespace n
+        ON n.nspname = 'event_manager'
+INNER JOIN pg_class c
+        ON c.relkind = 'r'
+       AND c.relname = ?
+       AND c.relnamespace = n.oid
+       AND c.oid = l.classid
+     WHERE l.locktype = 'advisory'
+       AND a.datname = ?
+SQL
 
-$Getopt::Std::OUTPUT_HELP_VERSION = $VERSION;
+$Getopt::Std::OUTPUT_HELP_VERSION   = $VERSION;
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
-my $username;
-my $dbname;
-my $port;
-my $hostname;
-my $debug = 0;
-my @children;
-my $use_valgrind = 0;
-my $manager_running = 0;
-my $manager_should_be_running = 0;
-our $make_check = 0;
+my  $username;
+my  $dbname;
+my  $port;
+my  $hostname;
+my  @children;
+my  $debug                     = 0;
+my  $use_valgrind              = 0;
+my  $manager_running           = 0;
+my  $manager_should_be_running = 0;
+our $make_check                = 0;
 
 sub HELP_MESSAGE()
 {
@@ -129,7 +149,6 @@ sub run_test($) :Export(:DEFAULT)
 
             if( $requirement =~ /event_manager/ )
             {
-                $manager_should_be_running = 1;
                 unless( check_event_manager_running( 1 ) )
                 {
                     return { result => 0, error_text => 'Event and/or Work processors not running' };
@@ -161,7 +180,7 @@ sub run_test($) :Export(:DEFAULT)
 
     if( $make_check )
     {
-        $command = "psql -U postgres -d $TEST_DATABASE -p 5432 -h localhost -f $filename &> $output_file 2>&1";
+        $command = "psql -U $MC_USER -d $TEST_DATABASE -p $MC_PORT -h $MC_HOST -f $filename &> $output_file 2>&1";
     }
     else
     {
@@ -243,41 +262,76 @@ sub check_event_manager_running(;$)
         },
     );
 
-    system( 'ps aux | grep Event &> /tmp/ps_result.txt' );
-
-    my $file;
-    my $file_contents = '';
-
-    open( $file, "</tmp/ps_result.txt" );
-
     my $event_processor_running = 0;
     my $work_processor_running = 0;
 
-    while( my $line = <$file> )
+    if( $manager_should_be_running )
     {
-        if( $line =~ /\sgrep\s/ )
+        my $dbh = DBI->connect( $MC_TEST_CS, 'postgres', undef );
+
+        unless( $dbh )
         {
-            next;
+            carp "Could not connect to test database \"$TEST_DATABASE\"";
+            return 0;
         }
 
-        if( $line =~ /\s-E\s/ and $line =~ /\s-d\s$dbname\s/ )
+        my $sth = $dbh->prepare( $CHECK_WORKER_RUNNING );
+
+        unless( $sth )
         {
-            $event_processor_running = 1;
+            carp 'Failed to prepare check transaction';
+            return 0;
         }
 
-        if( $line =~ /\s-W\s/ and $line =~ /\s-d\s$dbname\s/ )
-        {
-            $work_processor_running = 1;
-        }
-    }
+        $sth->bind_param( 1, 'tb_event_queue' );
 
-    if( $work_processor_running and $event_processor_running )
-    {
-        return 1;
+        if( $make_check )
+        {
+            $sth->bind_param( 2, $TEST_DATABASE );
+        }
+        else
+        {
+            $sth->bind_param( 2, $dbname );
+        }
+
+        unless( $sth->execute() )
+        {
+            carp 'Failed to check event queue worker';
+            return 0;
+        }
+
+        $event_processor_running = $sth->rows();
+
+        $sth->bind_param( 1, 'tb_work_queue' );
+
+        if( $make_check )
+        {
+            $sth->bind_param( 2, $TEST_DATABASE );
+        }
+        else
+        {
+            $sth->bind_param( 2, $dbname );
+        }
+
+        unless( $sth->execute() )
+        {
+            carp 'Failed to check work queue worker';
+            return 0;
+        }
+
+        $work_processor_running = $sth->rows();
+        $sth->finish();
+        $dbh->disconnect();
+
+        if( $work_processor_running and $event_processor_running )
+        {
+            return 1;
+        }
     }
 
     if( $start_process )
     {
+        $manager_should_be_running = 1;
         # Do the thing
         my $startflags = [];
         unless( $work_processor_running )
@@ -290,47 +344,48 @@ sub check_event_manager_running(;$)
             push( @$startflags, '-E 1' );
         }
 
-        foreach my $flag( @$startflags )
+        my $command = '';
+        my $flag    = join( ' ', @$startflags );
+        my $log     = $flag;
+        $log        =~ s/^-//g;
+        $log        =~ s/\s//g;
+
+        if( $make_check )
         {
-            my $log = $flag;
-            $log =~ s/^-//;
-            my $command = '';
-            if( $make_check )
-            {
-                $command = "./event_manager -U postgres -d \"$TEST_DATABASE\" -h localhost -p 5432 $flag \&> /tmp/event_manager_${log}.log";
-            }
-            else
-            {
-                $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
-            }
-
-            if( $use_valgrind )
-            {
-                $command = "${VALGRIND_PREFIX}${command}";
-                print "Executing async processor with command:\n $command\n";
-            }
-
-            my $pid = fork();
-
-            if( not defined( $pid ) )
-            {
-                croak 'Fork failed.';
-            }
-            elsif( $pid == 0 )
-            {
-                # child
-                start_process( $command );
-                exit 0;
-            }
-            else
-            {
-                push( @children, $pid );
-            }
+            $command = "./event_manager -U $MC_USER -d \"$TEST_DATABASE\" -h $MC_HOST -p $MC_PORT $flag \&> /tmp/event_manager_${log}.log";
         }
+        else
+        {
+            $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
+        }
+
+        if( $use_valgrind )
+        {
+            $command = "${VALGRIND_PREFIX}${command}";
+            print "Executing async processor with command:\n $command\n";
+        }
+
+        my $pid = fork();
+
+        if( not defined( $pid ) )
+        {
+            croak 'Fork failed.';
+        }
+        elsif( $pid == 0 )
+        {
+            # child
+            start_process( $command );
+            exit 0;
+        }
+        else
+        {
+            push( @children, $pid );
+        }
+
+        sleep( 5 );
 
         if( &check_event_manager_running() )
         {
-            sleep( 5 );
             return 1;
         }
 
@@ -509,14 +564,14 @@ if( scalar( @children ) > 0 )
 
 my $result = `ps aux | grep "Event Manager " | awk '{ print \$2 }'`;
 
-#foreach my $pid( split( "\n", $result ) )
-#{
-#    chomp( $pid );
-#    next unless( $pid =~ /^\d+$/ );
-#    kill 'TERM', $pid;
-#    sleep( 1 );
-#    kill 'KILL', $pid;
-#}
+foreach my $pid( split( "\n", $result ) )
+{
+    chomp( $pid );
+    next unless( $pid =~ /^\d+$/ );
+    kill 'TERM', $pid;
+    sleep( 1 );
+    kill 'KILL', $pid;
+}
 
 if( check_event_manager_running() )
 {
