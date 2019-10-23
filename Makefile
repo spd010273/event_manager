@@ -12,7 +12,6 @@ event_manager: src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib
 EXTENSION   = event_manager
 EXTVERSION  = 0.1
 DOCS        = README.md
-MODULES     = src/event_manager
 EXTRA_CLEAN = src/event_manager.o event_manager src/lib/*.o
 DATA        = $(wildcard sql/$(EXTENSION)--*.sql)
 
