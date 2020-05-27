@@ -130,7 +130,7 @@ unsigned int work_jobs;
 bool daemonize;
 bool single_step_only;
 char * conninfo;
-FILE * log_File;
+FILE * log_file;
 
 sig_atomic_t got_sighup;
 sig_atomic_t got_sigterm;

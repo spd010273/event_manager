@@ -263,7 +263,7 @@ sub check_event_manager_running(;$)
     );
 
     my $event_processor_running = 0;
-    my $work_processor_running = 0;
+    my $work_processor_running  = 0;
 
     if( $manager_should_be_running )
     {
@@ -334,15 +334,9 @@ sub check_event_manager_running(;$)
         $manager_should_be_running = 1;
         # Do the thing
         my $startflags = [];
-        unless( $work_processor_running )
-        {
-            push( @$startflags, '-W 1' );
-        }
 
-        unless( $event_processor_running )
-        {
-            push( @$startflags, '-E 1' );
-        }
+        push( @$startflags, '-W 1' );
+        push( @$startflags, '-E 1' );
 
         my $command = '';
         my $flag    = join( ' ', @$startflags );
@@ -362,7 +356,6 @@ sub check_event_manager_running(;$)
         if( $use_valgrind )
         {
             $command = "${VALGRIND_PREFIX}${command}";
-            print "Executing async processor with command:\n $command\n";
         }
 
         my $pid = fork();
@@ -375,6 +368,7 @@ sub check_event_manager_running(;$)
         {
             # child
             start_process( $command );
+            carp 'EM started';
             exit 0;
         }
         else
@@ -389,7 +383,7 @@ sub check_event_manager_running(;$)
             return 1;
         }
 
-        carp "Failed to startup event_manager";
+        carp 'Failed to verify the processors are running after start attempt';
     }
 
     return 0;

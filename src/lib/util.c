@@ -95,11 +95,15 @@ void _parse_args( int argc, char ** argv )
                 exit( 0 );
             case 'E':
                 event_job_count = optarg;
+#ifdef DEBUG
                 _log( LOG_LEVEL_DEBUG, "Got EJ: %s", event_job_count );
+#endif // DEBUG
                 break;
             case 'W':
                 work_job_count = optarg;
+#ifdef DEBUG
                 _log( LOG_LEVEL_DEBUG, "Got WJ: %s", work_job_count );
+#endif // DEBUG
                 break;
             case 'S':
                 single_step_only = true;
@@ -216,11 +220,13 @@ void _parse_args( int argc, char ** argv )
     strcat( conninfo, " dbname=" );
     strcat( conninfo, dbname );
 
+#ifdef DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Parsed args: %s",
         conninfo
     );
+#endif // DEBUG
 
     return;
 }
@@ -301,7 +307,8 @@ void _log( char * log_level, char * message, ... )
         {
             fprintf(
                 stderr,
-                "we're daemonized but the log file is not inited :("
+                "we're daemonized but the log file is not inited :(, message was %s\n",
+                message
             );
         }
     }
@@ -490,6 +497,10 @@ bool parent_init( int argc, char ** argv )
 
         if( log_file == NULL )
         {
+            fprintf(
+                stderr,
+                "Failed to open log file"
+            );
             return false;
         }
     }
@@ -757,6 +768,7 @@ struct worker * new_worker(
         if( workers == NULL )
         {
             size = ( work_jobs + event_jobs ) * sizeof( struct worker * );
+#ifdef DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Creating SHM with size %lu: WJ %d, EJ: %d",
@@ -764,7 +776,7 @@ struct worker * new_worker(
                 work_jobs,
                 event_jobs
             );
-
+#endif // DEBUG
             workers = ( struct worker ** ) create_shared_memory( size );
 
             if( workers == NULL )
@@ -783,8 +795,9 @@ struct worker * new_worker(
 
         result->my_argv = argv;
         result->my_argc = argc;
+#ifdef DEBUG
         _log( LOG_LEVEL_DEBUG, "Parent argv: %p argc: %d", argv, argc );
-
+#endif // DEBUG
         // Register signal handlers
         signal( SIGHUP, __sighup );
         signal( SIGTERM, __sigterm );
@@ -812,8 +825,10 @@ struct worker * new_worker(
             ( ( struct worker * ) data )->my_argv  = argv;
         }
 
+#ifdef DEBUG
         _log( LOG_LEVEL_DEBUG, "child argv: %p argc: %d", argv, argc );
         _log( LOG_LEVEL_DEBUG, "Post fork, got data %p", data );
+#endif // DEBUG
 
         // Register signal handlers
         _set_process_title(
@@ -1261,7 +1276,7 @@ void __term( void )
             if( me->tx_in_progress )
             {
                 PQexec( me->conn, "ROLLBACK" );
-                me->tx_in_progress = false; 
+                me->tx_in_progress = false;
             }
 
             PQfinish( me->conn );

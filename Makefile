@@ -7,7 +7,7 @@ LIBS         = -lm -lpq -lcurl
 PG_CPPFLAGS	 = -I./src/ -I./src/lib/ -I$(PGINCLUDEDIR) $(DEBUG) $(LIBS)
 
 event_manager: src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o
-	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl -DDEBUG
+	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl ${DEBUG}
 
 EXTENSION   = event_manager
 EXTVERSION  = 0.1
