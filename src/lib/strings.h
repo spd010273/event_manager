@@ -68,7 +68,7 @@ UPDATE " EXTENSION_NAME ".tb_event_queue eq \
  WHERE eq.event_table_work_item = $1::INTEGER \
    AND eq.uid IS NOT DISTINCT FROM $2::INTEGER \
    AND eq.recorded = $3::TIMESTAMP \
-   AND eq.pk_val = $4::INTEGER \
+   AND eq.pk_value = $4::INTEGER \
    AND eq.op = $5::CHAR(1) \
    AND eq.old::TEXT IS NOT DISTINCT FROM $6::TEXT \
    AND eq.new::TEXT IS NOT DISTINCT FROM $7::TEXT \
