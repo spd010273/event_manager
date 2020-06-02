@@ -251,7 +251,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
                 free( last_sql_state );
                 last_sql_state = NULL;
             }
-      
+
             last_sql_state = ( char * ) calloc(
                 sizeof( char ),
                 strlen( temp_last_sql_state ) + 1
@@ -441,7 +441,7 @@ bool _begin_transaction( struct worker * me )
 bool _commit_transaction( struct worker * me )
 {
     PGresult * result = NULL;
-    
+
     if( me == NULL )
     {
         return false;
@@ -482,7 +482,7 @@ bool _commit_transaction( struct worker * me )
     );
 
     // Transaction will be either successfully commited or enter an aborted state
-    // Regardless, it is completed    
+    // Regardless, it is completed
     me->tx_in_progress = false;
 
     if( PQresultStatus( result ) != PGRES_COMMAND_OK )
@@ -524,7 +524,7 @@ bool _commit_transaction( struct worker * me )
 bool _rollback_transaction( struct worker * me )
 {
     PGresult * result = NULL;
-    
+
     if( me == NULL )
     {
         return false;
@@ -625,6 +625,11 @@ void _queue_loop( struct worker * me )
         }
 
         dequeue_result = me->dequeue_function( me );
+
+        if( got_sighup )
+        {
+            _child_handle_sighup();
+        }
     }
 
     if( processed_count > 0 )
@@ -687,6 +692,16 @@ void _queue_loop( struct worker * me )
                 "Exiting after receiving SIGTERM"
             );
 
+            break;
+        }
+
+        if( got_sighup )
+        {
+            _child_handle_sighup();
+            _log(
+                LOG_LEVEL_DEBUG,
+                "restarting main loop after SIGHUP"
+            );
             break;
         }
 
@@ -755,6 +770,11 @@ void _queue_loop( struct worker * me )
                 while( me->dequeue_function( me ) > 0 )
                 {
                     processed_count++;
+
+                    if( got_sighup )
+                    {
+                        _child_handle_sighup();
+                    }
                 }
 
                 _log(
@@ -771,6 +791,16 @@ void _queue_loop( struct worker * me )
                 _log(
                     LOG_LEVEL_ERROR,
                     "Exiting after receiving SIGTERM"
+                );
+                break;
+            }
+
+            if( got_sighup )
+            {
+                _child_handle_sighup();
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "Restarting main loop after SIGHUP"
                 );
                 break;
             }
@@ -1223,7 +1253,7 @@ int work_queue_handler( struct worker * me )
                     LOG_LEVEL_WARNING,
                     "Failed to start transaction for marking work queue item as failed"
                 );
-                
+
                 if( me->tx_in_progress == true )
                 {
                     me->tx_in_progress = false;
@@ -1616,7 +1646,7 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
 
     // Initialize buffer
     write_buffer.pointer = calloc( 1, sizeof( char ) );
-    
+
     if( write_buffer.pointer == NULL )
     {
         //Really? You dont have 1 byte?
@@ -1900,7 +1930,7 @@ bool execute_action_query( struct worker * me, struct action_result * action )
             LOG_LEVEL_ERROR,
             "Failed to perform action query"
         );
-        
+
         _rollback_transaction( me );
         return false;
     }
@@ -3018,10 +3048,24 @@ void _queue_loop_wrapper( void * data )
             db_connect( me );
         }
 
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Child (type %s) entering main loop",
+            me == NULL ? "NULL" :
+                me->type == WORKER_TYPE_PARENT ? "PARENT" :
+                me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
+                me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
+                "Unknown"
+        );
         _queue_loop( me );
         _log(
             LOG_LEVEL_DEBUG,
-            "Child escaped from main loop"
+            "Child (type %s) escaped from main loop",
+            me == NULL ? "NULL" :
+                me->type == WORKER_TYPE_PARENT ? "PARENT" :
+                me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
+                me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
+                "Unknown"
         );
 
         if( single_step_only )

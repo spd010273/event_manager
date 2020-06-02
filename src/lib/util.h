@@ -132,9 +132,9 @@ bool single_step_only;
 char * conninfo;
 FILE * log_file;
 
-sig_atomic_t got_sighup;
-sig_atomic_t got_sigterm;
-sig_atomic_t got_sigint;
+volatile sig_atomic_t got_sighup;
+volatile sig_atomic_t got_sigterm;
+volatile sig_atomic_t got_sigint;
 
 struct worker ** workers;
 struct worker * parent;
@@ -165,6 +165,8 @@ void __sigterm( int ) __attribute__ ((noreturn));
 void __sigint( int ) __attribute__ ((noreturn));
 void __sighup( int );
 void __term( void ) __attribute__ ((noreturn));
+void __sighup_sigaction( int, siginfo_t *, void * );
+void _register_signal_handlers( void );
 
 void _gather_child_stats_to_self( struct em_stat ** );
 void _update_stats(
@@ -177,6 +179,9 @@ void _update_stats(
 // Mutex helpers
 bool _wait_and_set_mutex( struct worker * );
 bool __test_and_set( struct worker * );
+
+void _parent_handle_sighup( void );
+void _child_handle_sighup( void );
 
 void _set_process_title( char **, int, char *, unsigned int * );
 

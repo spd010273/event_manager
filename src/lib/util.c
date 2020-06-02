@@ -29,9 +29,9 @@ unsigned int event_jobs    = 0;
 unsigned int max_argv_size = 0;
 
 // Flags
-sig_atomic_t got_sighup  = false;
-sig_atomic_t got_sigterm = false;
-sig_atomic_t got_sigint  = false;
+volatile sig_atomic_t got_sighup  = false;
+volatile sig_atomic_t got_sigterm = false;
+volatile sig_atomic_t got_sigint  = false;
 
 static const char * usage_string = "\
 Usage: event_manager\n \
@@ -672,6 +672,28 @@ bool parent_init( int argc, char ** argv )
     return true;
 }
 
+// Register the signal handlers in the current context
+void _register_signal_handlers( void )
+{
+/*
+    struct sigaction sa = {{0}};
+
+    sa.sa_sigaction = __sighup_sigaction;
+    sa.sa_flags = SA_ONSTACK | SA_RESTART | SA_NODEFER | SA_SIGINFO;
+
+    if( sigaction( SIGHUP, &sa, NULL ) < 0 )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to register signal handler for SIGHUP"
+        );
+    }
+*/
+    signal( SIGHUP, __sighup );
+    signal( SIGINT, __sigint );
+    signal( SIGTERM, __sigterm );
+    return;
+}
 /*
  * struct worker * new_worker(
  *     unsigned short type,
@@ -799,10 +821,7 @@ struct worker * new_worker(
         _log( LOG_LEVEL_DEBUG, "Parent argv: %p argc: %d", argv, argc );
 #endif // DEBUG
         // Register signal handlers
-        signal( SIGHUP, __sighup );
-        signal( SIGTERM, __sigterm );
-        signal( SIGINT, __sigint );
-        _set_process_title( argv, argc, WORKER_TITLE_PARENT, &max_argv_size );
+        _register_signal_handlers();
         return result;
     }
 
@@ -839,9 +858,7 @@ struct worker * new_worker(
             &max_argv_size
         );
 
-        signal( SIGHUP, __sighup );
-        signal( SIGTERM, __sigterm );
-        signal( SIGINT, __sigint );
+        _register_signal_handlers();
 
         function( data ); // Child main() equiv
 
@@ -1036,6 +1053,7 @@ bool __test_and_set( struct worker * me )
 void __sigterm( int sig )
 {
     // TODO, verify that all processes receive this, and that the children cleanup, and the parent reaps
+    got_sigterm = true;
     _log(
         LOG_LEVEL_DEBUG,
         "Got SIGTERM. Completing current transaction..."
@@ -1045,7 +1063,7 @@ void __sigterm( int sig )
 }
 
 /*
- * void __sighub( int sig )
+ * void __sighup( int sig )
  *     SIGHUP handler
  *
  * Arguments:
@@ -1057,30 +1075,19 @@ void __sigterm( int sig )
  */
 void __sighup( int sig )
 {
-    struct worker * me      = NULL;
-    unsigned int    i       = 0;
-    bool            all_ack = false;
-    int             wstatus = 0;
+    struct worker * me = NULL;
+    int             i  = 0;
+
     me = get_worker_by_pid();
 
+    got_sighup = true;
     if( me == NULL )
     {
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Could not handle sighup, got null pid slice"
-        );
         return;
     }
 
     if( me->type == WORKER_TYPE_PARENT )
     {
-        _log(
-            LOG_LEVEL_INFO,
-            "Parent received reload command (SIGHUP)"
-        );
-
-        got_sighup = true;
-
         if( logrotate( me ) == false )
         {
             _log( LOG_LEVEL_ERROR, "log rotation failed" );
@@ -1091,117 +1098,15 @@ void __sighup( int sig )
         {
             if( workers[i] != NULL )
             {
-                _log(
-                    LOG_LEVEL_DEBUG,
-                    "PID table slice prior to sighup:"
-                );
-                _debug_worker_slot( workers[i] );
                 kill( workers[i]->pid, SIGHUP );
-            }
-            else
-            {
-                _log(
-                    LOG_LEVEL_WARNING,
-                    "Acking SIGHUP: tid slot %u is empty!",
-                    i
-                );
             }
         }
 
         // Verify that all children have acked the sighup
         // and re-entered the working state
-        while( all_ack == false )
-        {
-            sleep( 1 );
-            all_ack = true;
-
-            for( i = 0; i < ( work_jobs + event_jobs ); i++ )
-            {
-                if( workers[i] != NULL )
-                {
-                    if( workers[i]->status != STATUS_WORKING )
-                    {
-                        all_ack = false;
-                        _log(
-                            LOG_LEVEL_DEBUG,
-                            "The following worker has failed to re-enter working state following SIGHUP"
-                         );
-                         _debug_worker_slot( workers[i] );
-                         waitpid( workers[i]->pid, &wstatus, WNOHANG );
-
-                         if( WIFSIGNALED( wstatus ) )
-                         {
-                             _log(
-                                 LOG_LEVEL_DEBUG,
-                                 "FYI worker exited with status %d",
-                                 WTERMSIG( wstatus )
-                             );
-                         }
-                    }
-                }
-                else
-                {
-                    _log(
-                        LOG_LEVEL_WARNING,
-                        "Worker check post SIGHUP: tid slot %u is empty!",
-                        i
-                    );
-                }
-            }
-
-            if( all_ack == false )
-            {
-                _log(
-                    LOG_LEVEL_WARNING,
-                    "Not all workers have ACK'd the SIGUP"
-                );
-            }
-        }
-
-        got_sighup = false;
-        return;
     }
 
     // Worker section
-    me->status = STATUS_RELOAD;
-
-    _log(
-        LOG_LEVEL_INFO,
-        "Pid %u got SIGHUP, reloading config",
-        ( unsigned int ) getpid()
-    );
-
-    if( me->tx_in_progress )
-    {
-        if( me->conn != NULL && PQstatus( me->conn ) == CONNECTION_OK )
-        {
-            PQexec( me->conn, "ROLLBACK" );
-            me->tx_in_progress = false;
-        }
-    }
-
-    /*
-     *  Note: some connection poolers *cough* pgbouncer, pgpool will cache
-     *  GUC values. We will force a reconnect (and hopefully open up a new pool
-     *  in the process such that we get the latest value of our GUCs for tasks
-     *  such as get_uid / set_uid and REST calls
-     */
-    if( me->conn != NULL )
-    {
-        PQfinish( me->conn );
-    }
-
-    me->conn           = NULL;
-    me->tx_in_progress = false;
-
-    signal ( sig, __sighup );
-
-    me->status = STATUS_WORKING;
-    _log(
-        LOG_LEVEL_DEBUG,
-        "Child reset status to working"
-    );
-
     return;
 }
 
@@ -1463,6 +1368,15 @@ void _manage_children( void (*function)( void * ) )
 
     for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
     {
+        if( got_sighup )
+        {
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Parent received sighup, entering handler"
+            );
+            _parent_handle_sighup();
+        }
+
         if( workers[tid] == NULL )
         {
             _log(
@@ -1602,6 +1516,161 @@ void _manage_children( void (*function)( void * ) )
     return;
 }
 
+void _child_handle_sighup( void )
+{
+    struct worker * me = NULL;
+
+    me = get_worker_by_pid();
+
+    me->status = STATUS_RELOAD;
+    _log(
+        LOG_LEVEL_INFO,
+        "Pid %u got SIGHUP, reloading config",
+        ( unsigned int ) getpid()
+    );
+
+    if( me->tx_in_progress )
+    {
+        if( me->conn != NULL && PQstatus( me->conn ) == CONNECTION_OK )
+        {
+            PQexec( me->conn, "ROLLBACK" );
+            me->tx_in_progress = false;
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Successfully rolled back in progress transaction"
+            );
+        }
+        else
+        {
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Transaction is in progress but conn handle is dead"
+            );
+        }
+    }
+
+    /*
+     *  Note: some connection poolers *cough* pgbouncer, pgpool will cache
+     *  GUC values. We will force a reconnect (and hopefully open up a new pool
+     *  in the process such that we get the latest value of our GUCs for tasks
+     *  such as get_uid / set_uid and REST calls
+     */
+    if( me->conn != NULL )
+    {
+        PQfinish( me->conn );
+    }
+
+    me->conn           = NULL;
+    me->tx_in_progress = false;
+
+    signal ( SIGHUP, __sighup );
+
+    me->status = STATUS_WORKING;
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Child reset status to working"
+    );
+
+    got_sighup = false;
+    return;
+}
+
+void _parent_handle_sighup( void )
+{
+    bool all_ack       = false;
+    int  sleep_backoff = 0;
+    int  busy_count    = 0;
+    int  i             = 0;
+    int  wstatus       = 0;
+
+    while( all_ack == false )
+    {
+        sleep( 2 + sleep_backoff );
+        busy_count = 0;
+        all_ack = true;
+
+        for( i = 0; i < ( work_jobs + event_jobs ); i++ )
+        {
+            if( workers[i] != NULL )
+            {
+                if( workers[i]->status != STATUS_WORKING )
+                {
+                    all_ack = false;
+
+                    if( workers[i]->tx_in_progress )
+                    {
+                        busy_count++;
+
+                        _log(
+                            LOG_LEVEL_DEBUG,
+                            "Worker %d is in a transaction and cannot "\
+                            "process SIGHUP",
+                            workers[i]->pid
+                        );
+
+                        if( sleep_backoff == 0 )
+                        {
+                            // Use MAX_LOG_WAIT to extend the sleep time
+                            sleep_backoff = MAX_LOCK_WAIT;
+                        }
+                    }
+                    else
+                    {
+                        _log(
+                            LOG_LEVEL_DEBUG,
+                            "The following worker has failed to re-enter "\
+                            "working state following SIGHUP"
+                         );
+                        _debug_worker_slot( workers[i] );
+                    }
+
+                    waitpid( workers[i]->pid, &wstatus, WNOHANG );
+
+                    if( WIFSIGNALED( wstatus ) )
+                    {
+                        _log(
+                            LOG_LEVEL_DEBUG,
+                            "FYI worker exited with status %d",
+                            WTERMSIG( wstatus )
+                        );
+                    }
+                }
+            }
+            else
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Worker check post SIGHUP: tid slot %u is empty!",
+                    i
+                );
+            }
+        }
+
+        if( all_ack == false )
+        {
+            if( busy_count > 0 )
+            {
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "There are %u worker(s) that are currently "\
+                    "processing items",
+                    busy_count
+                );
+            }
+            else
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "Not all workers have ACK'd the SIGHUP"
+                );
+            }
+        }
+    }
+
+    got_sighup = false;
+    return;
+}
 /*
  *  void _set_process_title(
  *      char **        argv,
