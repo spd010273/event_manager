@@ -165,7 +165,6 @@ void __sigterm( int ) __attribute__ ((noreturn));
 void __sigint( int ) __attribute__ ((noreturn));
 void __sighup( int );
 void __term( void ) __attribute__ ((noreturn));
-void __sighup_sigaction( int, siginfo_t *, void * );
 void _register_signal_handlers( void );
 
 void _gather_child_stats_to_self( struct em_stat ** );

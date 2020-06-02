@@ -675,25 +675,12 @@ bool parent_init( int argc, char ** argv )
 // Register the signal handlers in the current context
 void _register_signal_handlers( void )
 {
-/*
-    struct sigaction sa = {{0}};
-
-    sa.sa_sigaction = __sighup_sigaction;
-    sa.sa_flags = SA_ONSTACK | SA_RESTART | SA_NODEFER | SA_SIGINFO;
-
-    if( sigaction( SIGHUP, &sa, NULL ) < 0 )
-    {
-        _log(
-            LOG_LEVEL_ERROR,
-            "Failed to register signal handler for SIGHUP"
-        );
-    }
-*/
     signal( SIGHUP, __sighup );
     signal( SIGINT, __sigint );
     signal( SIGTERM, __sigterm );
     return;
 }
+
 /*
  * struct worker * new_worker(
  *     unsigned short type,
