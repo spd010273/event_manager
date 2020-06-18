@@ -949,6 +949,8 @@ int event_queue_handler( struct worker * me )
     _add_parameter_to_query( work_item_query_obj, "op",                    op                    );
     _add_parameter_to_query( work_item_query_obj, "pk_value",              pk_value              );
     _add_parameter_to_query( work_item_query_obj, "recorded",              recorded              );
+    _add_parameter_to_query( work_item_query_obj, "NEW",                   new                   );
+    _add_parameter_to_query( work_item_query_obj, "OLD",                   old                   );
 
     _add_json_parameter_to_query( work_item_query_obj, old,           "OLD."           );
     _add_json_parameter_to_query( work_item_query_obj, new,           "NEW."           );
@@ -1220,7 +1222,6 @@ int work_queue_handler( struct worker * me )
 
         if( action_result == false )
         {
-            PQclear( result );
             _rollback_transaction( me );
 
             if( _begin_transaction( me ) )
@@ -1259,6 +1260,7 @@ int work_queue_handler( struct worker * me )
                     me->tx_in_progress = false;
                 }
             }
+            PQclear( result );
 
             return -1;
         }
