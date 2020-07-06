@@ -83,31 +83,31 @@ struct action_result {
 
 /* Function Prototypes */
 // Main functions
-void _queue_loop( struct worker * );
-void _queue_loop_wrapper( void * );
-int work_queue_handler( struct worker * );
-int event_queue_handler( struct worker * );
-bool execute_action( struct worker *, PGresult *, int );
-bool execute_action_query( struct worker *, struct action_result * );
-bool execute_remote_uri_call( struct worker *, struct action_result * );
-bool set_uid( struct worker *, char *, char * );
+static void _queue_loop( struct worker * );
+static void _queue_loop_wrapper( void * );
+static int work_queue_handler( struct worker * );
+static int event_queue_handler( struct worker * );
+static bool execute_action( struct worker *, PGresult *, int );
+static bool execute_action_query( struct worker *, struct action_result * );
+static bool execute_remote_uri_call( struct worker *, struct action_result * );
+static bool set_uid( struct worker *, char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
 
 // Helper functions
-PGresult * _execute_query( struct worker *, char *, char **, int );
-void _gather_and_update_stats( struct worker *, struct em_stat ** );
-char * get_column_value( int, PGresult *, char * );
-bool is_column_null( int, PGresult *, char * );
-bool _rollback_transaction( struct worker * );
-bool _commit_transaction( struct worker * );
-bool _begin_transaction( struct worker * );
-void set_session_gucs( struct worker *, char * );
-void clear_session_gucs( struct worker *, char * );
-void _set_application_name( struct worker * );
-bool _get_advisory_lock( struct worker * );
-bool db_connect( struct worker * );
+static PGresult * _execute_query( struct worker *, char *, char **, int );
+static void _gather_and_update_stats( struct worker *, struct em_stat ** );
+static char * get_column_value( int, PGresult *, char * );
+static bool is_column_null( int, PGresult *, char * );
+static bool _rollback_transaction( struct worker * );
+static bool _commit_transaction( struct worker * );
+static bool _begin_transaction( struct worker * );
+static void set_session_gucs( struct worker *, char * );
+static void clear_session_gucs( struct worker *, char * );
+static void _set_application_name( struct worker * );
+static bool _get_advisory_lock( struct worker * );
+static bool db_connect( struct worker * );
 // Integration functions
-void _cyanaudit_integration( struct worker *, char * );
+static void _cyanaudit_integration( struct worker *, char * );
 
 // Program Entry
 int main( int, char ** );

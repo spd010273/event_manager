@@ -42,14 +42,21 @@ bool   enable_stats        = false;
  *     - Emits error on syntax or improper termination of query.
  */
 
-PGresult * _execute_query( struct worker * me, char * query, char ** params, int param_count )
+static PGresult * _execute_query(
+    struct worker * me,
+    char *          query,
+    char **         params,
+    int             param_count
+)
 {
     PGresult *   result              = NULL;
     char *       last_sql_state      = NULL;
     char *       temp_last_sql_state = NULL;
     unsigned int retry_counter       = 0;
     unsigned int last_backoff_time   = 1;
-    unsigned int i                   = 0;
+#ifdef DEBUG
+    register unsigned int i          = 0;
+#endif // DEBUG
 
     if( me == NULL )
     {
@@ -65,6 +72,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
         }
     }
 
+#ifdef DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Executing query: '%s':",
@@ -79,7 +87,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
             _log( LOG_LEVEL_DEBUG, "%d (bindpoint $%d): %s", i, i+1, params[i] );
         }
     }
-
+#endif // DEBUG
     // Attempt to execute the query on our handle
     while(
             PQstatus( me->conn ) != CONNECTION_OK &&
@@ -324,7 +332,7 @@ PGresult * _execute_query( struct worker * me, char * query, char ** params, int
     return NULL;
 }
 
-bool db_connect( struct worker * me )
+static bool db_connect( struct worker * me )
 {
     unsigned short retry_counter     = 0;
     unsigned int   last_backoff_time = 0;
@@ -380,7 +388,7 @@ bool db_connect( struct worker * me )
  * Error Conditions:
  *     Emits error on failure to start transaction (one is already in progress.)
  */
-bool _begin_transaction( struct worker * me )
+static bool _begin_transaction( struct worker * me )
 {
     PGresult * result = NULL;
 
@@ -438,7 +446,7 @@ bool _begin_transaction( struct worker * me )
  * Error Conditions:
  *    Emits error on failure to commit transaction.
  */
-bool _commit_transaction( struct worker * me )
+static bool _commit_transaction( struct worker * me )
 {
     PGresult * result = NULL;
 
@@ -521,7 +529,7 @@ bool _commit_transaction( struct worker * me )
  * Error Conditions:
  *     Emits error on failure to rollback transaction
  */
-bool _rollback_transaction( struct worker * me )
+static bool _rollback_transaction( struct worker * me )
 {
     PGresult * result = NULL;
 
@@ -593,7 +601,7 @@ bool _rollback_transaction( struct worker * me )
  *     - Emits error when listen channel cannot be bound with select().
  *     - Emits error when a SIGTERM is received.
  */
-void _queue_loop( struct worker * me )
+static void _queue_loop( struct worker * me )
 {
     PGnotify * notify          = NULL;
     char *     listen_command  = NULL;
@@ -846,36 +854,30 @@ void _queue_loop( struct worker * me )
  *              - Deletion of dequeued queue item
  *              - commit of transaction
  */
-int event_queue_handler( struct worker * me )
+static int event_queue_handler( struct worker * me )
 {
-    PGresult * result           = NULL;
-    PGresult * work_item_result = NULL;
-    PGresult * delete_result    = NULL;
-    PGresult * insert_result    = NULL;
-    PGresult * update_result    = NULL;
-
-    struct query * work_item_query_obj = NULL;
-
-    // Values that need to be copied to work_queue
-    char * uid                    = NULL;
-    char * recorded               = NULL;
-    char * transaction_label      = NULL;
-    char * execute_asynchronously = NULL;
-    char * action                 = NULL;
-
-    // Var's we need
-    char * work_item_query       = NULL;
-    char * pk_value              = NULL;
-    char * op                    = NULL;
-    char * ctid                  = NULL;
-    char * event_table_work_item = NULL;
-    char * old                   = NULL;
-    char * new                   = NULL;
-    char * session_values        = NULL;
-
-    char * parameters = NULL;
-    char * params[9]  = {NULL};
-    int    i          = 0;
+    PGresult *            result                 = NULL;
+    PGresult *            work_item_result       = NULL;
+    PGresult *            delete_result          = NULL;
+    PGresult *            insert_result          = NULL;
+    PGresult *            update_result          = NULL;
+    struct query *        work_item_query_obj    = NULL;
+    char *                uid                    = NULL;
+    char *                recorded               = NULL;
+    char *                transaction_label      = NULL;
+    char *                execute_asynchronously = NULL;
+    char *                action                 = NULL;
+    char *                work_item_query        = NULL;
+    char *                pk_value               = NULL;
+    char *                op                     = NULL;
+    char *                ctid                   = NULL;
+    char *                event_table_work_item  = NULL;
+    char *                old                    = NULL;
+    char *                new                    = NULL;
+    char *                session_values         = NULL;
+    char *                parameters             = NULL;
+    char *                params[9]              = {NULL};
+    register unsigned int i                      = 0;
 
     if( !_begin_transaction( me ) )
     {
@@ -969,8 +971,11 @@ int event_queue_handler( struct worker * me )
         return -1;
     }
 
+#ifdef DEBUG
     _log( LOG_LEVEL_DEBUG, "WORK ITEM QUERY: " );
     _debug_struct( work_item_query_obj );
+#endif // DEBUG
+
     work_item_result = _execute_query(
         me,
         work_item_query_obj->query_string,
@@ -1142,16 +1147,15 @@ int event_queue_handler( struct worker * me )
  *              - Deletion of dequeued queue item
  *              - commit of transaction (if applicable)
  */
-int work_queue_handler( struct worker * me )
+static int work_queue_handler( struct worker * me )
 {
-    PGresult * result        = NULL;
-    PGresult * delete_result = NULL;
-    PGresult * update_result = NULL;
-
-    bool   action_result = false;
-    int    row_count     = 0;
-    int    i             = 0;
-    char * params[7]     = {NULL};
+    PGresult *            result        = NULL;
+    PGresult *            delete_result = NULL;
+    PGresult *            update_result = NULL;
+    bool                  action_result = false;
+    int                   row_count     = 0;
+    char *                params[7]     = {NULL};
+    register unsigned int i             = 0;
 
     _log(
         LOG_LEVEL_DEBUG,
@@ -1320,7 +1324,7 @@ int work_queue_handler( struct worker * me )
  * Error Conditions:
  *     None - may emit libpq errors or warnings
  */
-char * get_column_value( int row, PGresult * result, char * column_name )
+static char * get_column_value( int row, PGresult * result, char * column_name )
 {
     if( is_column_null( row, result, column_name ) )
     {
@@ -1351,7 +1355,7 @@ char * get_column_value( int row, PGresult * result, char * column_name )
  * Error Conditions:
  *    None - may emit libpq errors or warnings
  */
-bool is_column_null( int row, PGresult * result, char * column_name )
+static bool is_column_null( int row, PGresult * result, char * column_name )
 {
     if(
         PQgetisnull(
@@ -1451,7 +1455,7 @@ static size_t _curl_write_callback(
  *     - Emits error when unsupported method passed as argument.
  *     - Can emit CuRL errors / warnings.
  */
-bool execute_remote_uri_call( struct worker * me, struct action_result * action )
+static bool execute_remote_uri_call( struct worker * me, struct action_result * action )
 {
     struct curl_response write_buffer  = {0};
     CURLcode             response      = {0};
@@ -1866,7 +1870,7 @@ bool execute_remote_uri_call( struct worker * me, struct action_result * action 
  *     - Emit error on failure to allocate string memory.
  *     - Emit error on transaction failure
  */
-bool execute_action_query( struct worker * me, struct action_result * action )
+static bool execute_action_query( struct worker * me, struct action_result * action )
 {
     PGresult * action_result;
     struct query * action_query;
@@ -1914,8 +1918,10 @@ bool execute_action_query( struct worker * me, struct action_result * action )
         action_query->query_string
     );
 
+#ifdef DEBUG
     _log( LOG_LEVEL_DEBUG, "ACTION QUERY: " );
     _debug_struct( action_query );
+#endif // DEBUG
 
     action_result = _execute_query(
         me,
@@ -1958,7 +1964,7 @@ bool execute_action_query( struct worker * me, struct action_result * action )
  *     - Emits error on inability to allocate string memory.
  *     - Emits error from URI or query subroutines upon failure.
  */
-bool execute_action( struct worker * me, PGresult * result, int row )
+static bool execute_action( struct worker * me, PGresult * result, int row )
 {
     bool                   execute_action_result = false;
     struct action_result   action                = {0};
@@ -2059,7 +2065,7 @@ bool execute_action( struct worker * me, PGresult * result, int row )
  *     Emits error on failure to make a call to
  *     cyanaudit.fn_label_last_transaction().
  */
-void _cyanaudit_integration( struct worker * me, char * transaction_label )
+static void _cyanaudit_integration( struct worker * me, char * transaction_label )
 {
     PGresult * cyanaudit_result = NULL;
     char *     param[1]         = {NULL};
@@ -2104,7 +2110,7 @@ void _cyanaudit_integration( struct worker * me, char * transaction_label )
  *     - Emits error on failure to allocate string memory.
  *     - Emits error on failure to execute SQL function.
  */
-bool set_uid( struct worker * me, char * uid, char * session_values )
+static bool set_uid( struct worker * me, char * uid, char * session_values )
 {
     PGresult *     uid_function_result = NULL;
     struct query * set_uid_query_obj   = NULL;
@@ -2243,14 +2249,14 @@ bool set_uid( struct worker * me, char * uid, char * session_values )
  */
 int main( int argc, char ** argv )
 {
-    PGresult *       result           = NULL;
-    PGresult *       cyanaudit_result = NULL;
-    char *           params[1]        = {NULL};
-    unsigned int     tid              = 0;
-    int              random_ind       = 4; // determined by dice roll
-    int              row_count        = 0;
-    time_t           last_stat_update = 0;
-    struct em_stat * stats[2]         = {NULL};
+    PGresult *            result           = NULL;
+    PGresult *            cyanaudit_result = NULL;
+    char *                params[1]        = {NULL};
+    register unsigned int tid              = 0;
+    int                   random_ind       = 4; // determined by dice roll
+    int                   row_count        = 0;
+    time_t                last_stat_update = 0;
+    struct em_stat *      stats[2]         = {NULL};
 
     _parse_args( argc, argv );
 
@@ -2414,7 +2420,7 @@ int main( int argc, char ** argv )
     return 0;
 }
 
-void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
+static void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
 {
     PGresult * stat_update         = NULL;
     char *     params[4]           = {NULL};
@@ -2595,7 +2601,7 @@ void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
  *     - Emits error on failure to set GUC via SQL commands.
  *
  */
-void set_session_gucs( struct worker * me, char * session_gucs )
+static void set_session_gucs( struct worker * me, char * session_gucs )
 {
     PGresult *   result           = NULL;
     jsmntok_t *  json_tokens      = NULL;
@@ -2805,7 +2811,7 @@ void set_session_gucs( struct worker * me, char * session_gucs )
  *     - Emits error on failure to clear GUC via SQL commands.
  */
 
-void clear_session_gucs( struct worker * me, char * session_gucs )
+static void clear_session_gucs( struct worker * me, char * session_gucs )
 {
     PGresult *   result         = NULL;
     jsmntok_t *  json_tokens    = NULL;
@@ -2951,7 +2957,7 @@ void clear_session_gucs( struct worker * me, char * session_gucs )
  *     - Emits error on failure to initialize CURL handle
  *     - Emits error on invalid argument
  */
-void _queue_loop_wrapper( void * data )
+static void _queue_loop_wrapper( void * data )
 {
     struct worker * me        = NULL;
     PGresult *      conn_test = NULL;
@@ -3085,7 +3091,7 @@ void _queue_loop_wrapper( void * data )
     exit( 0 );
 }
 
-void _set_application_name( struct worker * me )
+static void _set_application_name( struct worker * me )
 {
     char *       application_name_command = NULL;
     PGresult *   result                   = NULL;
@@ -3179,7 +3185,7 @@ void _set_application_name( struct worker * me )
     return;
 }
 
-bool _get_advisory_lock( struct worker * me )
+static bool _get_advisory_lock( struct worker * me )
 {
     char * params[2]  = {NULL};
     PGresult * result = NULL;
