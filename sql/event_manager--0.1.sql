@@ -636,7 +636,10 @@ BEGIN
         )
             SELECT schema_name,
                    table_name,
-                   ( SELECT array_agg( col ) FROM unnest( column_name ) col WHERE col IS NOT NULL ) AS column_name,
+                   CASE WHEN array_position( column_name, NULL ) IS NOT NULL
+                        THEN NULL
+                        ELSE column_name
+                         END AS column_name,
                    primary_key,
                    CASE WHEN 'I' = ANY( op ) THEN TRUE
                         ELSE FALSE
@@ -697,7 +700,10 @@ BEGIN
         )
             SELECT schema_name,
                    table_name,
-                   ( SELECT array_agg( col ) FROM unnest( column_name ) col WHERE col IS NOT NULL ) AS column_name,
+                   CASE WHEN array_position( column_name, NULL ) IS NOT NULL
+                        THEN NULL
+                        ELSE column_name
+                         END AS column_name,
                    primary_key,
                    i,
                    u,
