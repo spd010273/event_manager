@@ -27,7 +27,7 @@ INNER JOIN pg_catalog.pg_namespace n \
         ON n.oid = e.extnamespace \
      WHERE e.extname = $1";
 
-static const char * extension_check_query = "\
+static const char * get_event_queue_item = "\
 WITH ct_lock AS \
 ( \
     SELECT eq.*, \
