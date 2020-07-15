@@ -27,7 +27,18 @@ INNER JOIN pg_catalog.pg_namespace n \
         ON n.oid = e.extnamespace \
      WHERE e.extname = $1";
 
-static const char * get_event_queue_item = "\
+static const char * extension_check_query = "\
+WITH ct_lock AS \
+( \
+    SELECT eq.*, \
+           eq.ctid \
+      FROM " EXTENSION_NAME ".tb_event_queue eq \
+     WHERE NOT eq.failed \
+  ORDER BY eq.failed ASC, \
+           eq.recorded ASC \
+     LIMIT 1 \
+FOR UPDATE OF eq SKIP LOCKED \
+) \
     SELECT eq.event_table_work_item, \
            eq.uid, \
            eq.recorded, \
@@ -41,14 +52,9 @@ static const char * get_event_queue_item = "\
            eq.new, \
            eq.session_values, \
            eq.ctid \
-      FROM " EXTENSION_NAME ".tb_event_queue eq \
+      FROM ct_lock eq \
 INNER JOIN " EXTENSION_NAME ".tb_event_table_work_item etwi \
-        ON etwi.event_table_work_item = eq.event_table_work_item \
-     WHERE eq.failed IS FALSE \
-  ORDER BY eq.failed ASC, \
-           eq.recorded ASC \
-     LIMIT 1 \
-       FOR UPDATE OF eq SKIP LOCKED";
+        ON etwi.event_table_work_item = eq.event_table_work_item";
 
 static const char * delete_event_queue_item = "\
 DELETE FROM " EXTENSION_NAME ".tb_event_queue eq \
