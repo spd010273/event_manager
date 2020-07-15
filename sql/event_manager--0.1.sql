@@ -149,7 +149,7 @@ CREATE TABLE @extschema@.tb_event_table_work_item
 (
     event_table_work_item   INTEGER PRIMARY KEY DEFAULT nextval('@extschema@.sq_pk_event_table_work_item'),
     source_event_table      INTEGER NOT NULL,
-    source_column_name      VARCHAR(63),
+    source_column_name      VARCHAR,
     target_event_table      INTEGER,
     action                  INTEGER NOT NULL,
     label                   JSONB,
@@ -177,7 +177,7 @@ SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_table_work_ite
 COMMENT ON TABLE @extschema@.tb_event_table_work_item IS 'A list of actions that should occur for any given event table';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_event_table IS 'Indicates the table that can trigger this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.target_event_table IS 'Indicates the target of this work items action. Not necessary but useful for any user interface built around this';
-COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_column_name IS 'Indicated the column of the source table this event if firing on. This is not used for selectively firing update triggers but to help prevent the user from implementing identical/similar events. NOTE: This column can be comma delimited';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.source_column_name IS 'Indicated the column(s) of the source table this event if firing on. This is used for selectively firing update triggers. NOTE: This column can be comma delimited';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.action IS 'Foreign key to tb_action - indicates what this work item generates parameters for';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.label IS 'User-facing label for this work item';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.description IS 'User-facing description for that this work item is / does';
