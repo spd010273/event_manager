@@ -604,13 +604,34 @@ BEGIN
                    unnest( COALESCE( op, '{null}'::VARCHAR[] ) ) AS op
               FROM @extschema@.tb_event_table_work_item
         ),
+        tt_source_column_filter AS
+        (
+            SELECT tt.source_event_table,
+                   array_agg( DISTINCT a.attname::VARCHAR ) AS column_name,
+                   tt.op
+              FROM tt_op_expansion tt
+        INNER JOIN @extschema@.tb_event_table et
+                ON et.event_table = tt.source_event_table
+        INNER JOIN pg_catalog.pg_class c
+                ON c.relname::VARCHAR = et.table_name
+        INNER JOIN pg_catalog.pg_namespace n
+                ON n.nspname::VARCHAR = et.schema_name
+               AND n.oid = c.relnamespace
+        INNER JOIN pg_attribute a
+                ON a.attrelid = c.oid
+               AND a.attnum > 0
+               AND a.attname::VARCHAR = ANY( tt.source_column_name )
+             WHERE tt.op = 'U'
+          GROUP BY tt.source_event_table,
+                   tt.op
+        ),
         tt_aggregate AS
         (
             SELECT n.nspname::VARCHAR AS schema_name,
                    c.relname::VARCHAR AS table_name,
-                   array_agg( DISTINCT a.attname::VARCHAR ) AS column_name,
                    a_pk.attname::VARCHAR AS primary_key,
-                   array_agg( DISTINCT tt.op ) AS op
+                   array_agg( DISTINCT tt.op ) AS op,
+                   tt.source_event_table
               FROM @extschema@.tb_event_table et
         INNER JOIN tt_op_expansion tt
                 ON tt.source_event_table = et.event_table
@@ -619,10 +640,6 @@ BEGIN
         INNER JOIN pg_catalog.pg_namespace n
                 ON n.oid = c.relnamespace
                AND n.nspname::VARCHAR = et.schema_name
-         LEFT JOIN pg_catalog.pg_attribute a
-                ON a.attrelid = c.oid
-               AND a.attnum > 0
-               AND a.attname::VARCHAR = ANY( tt.source_column_name )
         INNER JOIN pg_catalog.pg_attribute a_pk
                 ON a_pk.attrelid = c.oid
                AND a_pk.attnum > 0
@@ -632,25 +649,28 @@ BEGIN
                AND cn.conkey[1] = a_pk.attnum
           GROUP BY n.nspname,
                    c.relname,
+                   tt.source_event_table,
                    a_pk.attname
         )
-            SELECT schema_name,
-                   table_name,
-                   CASE WHEN array_position( column_name, NULL ) IS NOT NULL
+            SELECT tta.schema_name,
+                   tta.table_name,
+                   CASE WHEN ttf.column_name IS NULL OR array_position( ttf.column_name, NULL ) IS NOT NULL
                         THEN NULL
-                        ELSE column_name
+                        ELSE ttf.column_name
                          END AS column_name,
-                   primary_key,
-                   CASE WHEN 'I' = ANY( op ) THEN TRUE
+                   tta.primary_key,
+                   CASE WHEN 'I' = ANY( tta.op ) THEN TRUE
                         ELSE FALSE
                          END AS i,
-                   CASE WHEN 'U' = ANY( op ) THEN TRUE
+                   CASE WHEN 'U' = ANY( tta.op ) THEN TRUE
                         ELSE FALSE
                          END AS u,
-                   CASE WHEN 'D' = ANY( op ) THEN TRUE
+                   CASE WHEN 'D' = ANY( tta.op ) THEN TRUE
                         ELSE FALSE
                          END AS d
-              FROM tt_aggregate
+              FROM tt_aggregate tta
+         LEFT JOIN tt_source_column_filter ttf
+                ON ttf.source_event_table = tta.source_event_table
     );
 
     CREATE TEMP TABLE tt_existing_triggers AS
