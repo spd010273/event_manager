@@ -600,7 +600,7 @@ BEGIN
         WITH tt_op_expansion AS
         (
             SELECT source_event_table,
-                   unnest( COALESCE( regexp_split_to_array( source_column_name, ',' ), '{null}'::VARCHAR[] ) ) AS source_column_name,
+                   COALESCE( regexp_split_to_array( source_column_name, ',' ), '{null}'::VARCHAR[] ) AS source_column_name,
                    unnest( COALESCE( op, '{null}'::VARCHAR[] ) ) AS op
               FROM @extschema@.tb_event_table_work_item
         ),
@@ -622,7 +622,7 @@ BEGIN
          LEFT JOIN pg_catalog.pg_attribute a
                 ON a.attrelid = c.oid
                AND a.attnum > 0
-               AND a.attname::VARCHAR = tt.source_column_name
+               AND a.attname::VARCHAR = ANY( tt.source_column_name )
         INNER JOIN pg_catalog.pg_attribute a_pk
                 ON a_pk.attrelid = c.oid
                AND a_pk.attnum > 0
