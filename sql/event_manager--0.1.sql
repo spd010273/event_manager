@@ -412,8 +412,6 @@ DECLARE
     my_uid                      INTEGER;
     my_event_table_work_item    INTEGER;
     my_guc_values               JSONB;
-    my_source_columns           VARCHAR;
-    my_update_diff              BOOLEAN;
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
         my_record := NEW;
@@ -465,12 +463,10 @@ BEGIN
     END IF;
 
     FOR my_when_function,
-        my_event_table_work_item,
-        my_source_columns
+        my_event_table_work_item
                         IN(
                             SELECT etwi.when_function,
-                                   etwi.event_table_work_item,
-                                   etwi.source_column_name
+                                   etwi.event_table_work_item
                               FROM @extschema@.tb_event_table_work_item etwi
                         INNER JOIN @extschema@.tb_event_table et
                                 ON et.event_table = etwi.source_event_table
@@ -490,18 +486,6 @@ BEGIN
                 new_record,
                 old_record;
 
-        IF( TG_OP = 'UPDATE' AND my_source_columns IS NOT NULL ) THEN
-            SELECT TRUE = ANY(
-                       array_agg(
-                           new_record->>x IS DISTINCT FROM old_record->>x
-                       )
-                   ) AS diff
-              INTO my_update_diff
-              FROM unnest( string_to_array( my_source_columns, ',' ) ) x;
-
-            CONTINUE WHEN my_update_diff IS FALSE;
-        END IF;
-        
         IF( my_when_result IS TRUE ) THEN
             INSERT INTO @extschema@.tb_event_queue
                         (
