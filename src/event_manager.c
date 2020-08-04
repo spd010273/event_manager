@@ -54,9 +54,7 @@ static PGresult * _execute_query(
     char *       temp_last_sql_state = NULL;
     unsigned int retry_counter       = 0;
     unsigned int last_backoff_time   = 1;
-#ifdef DEBUG
-    register unsigned int i          = 0;
-#endif // DEBUG
+    unsigned int i                   = 0;
 
     if( me == NULL )
     {
@@ -311,7 +309,6 @@ static PGresult * _execute_query(
             "Query failed with state %s",
             last_sql_state
         );
-
     }
     else
     {
@@ -321,6 +318,19 @@ static PGresult * _execute_query(
             retry_counter,
             last_sql_state
         );
+    }
+
+    if( param_count > 0 )
+    {
+        for( i = 0; i < param_count; i++ )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "param[%d]: '%s'",
+                i,
+                params[i]
+            );
+        }
     }
 
     if( last_sql_state != NULL )
