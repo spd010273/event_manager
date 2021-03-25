@@ -20,4 +20,7 @@ PGXS := $(shell $(PG_CONFIG) --pgxs)
 check:
 	./run_tests -M -D
 
+installcheck:
+	./run_tests -M -D
+
 include $(PGXS)

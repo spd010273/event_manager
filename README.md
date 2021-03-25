@@ -21,9 +21,11 @@ For more information on using this extension, see docs/usage.md
 
 Events can be 'subscribed to' by inserting the table into tb_event_table and creating at least one tb_event_table_work_item for that table.
 
-When DML occurs on that table (an event), the work item entries for that event table are executed. These potential queue elements are optionally filtered by a function that can determine whether these events apply to this specific work item.
+When DML occurs on that table (an event), the work item entries for that event table are executed. These potential queue elements are optionally filtered by a function ( the when function ) that can determine whether these events apply to this specific work item.
 
 Work item queries are expected to generate one or more rows of JSONB aliased as 'parameters' which are fed into the action. Along with these parameters, the original event's transaction timestamp and other datapoints will be made available to the action.
+
+Conceptually, an event and its subsequent work items operate like a standard database trigger.
 
 ## Event Query (work_item_query)
 
@@ -68,3 +70,7 @@ Actions are either local database modification or remote API calls that happen a
 
 ### Version 0.1
 Initial Version
+
+### Version 0.2
+* Add configuration manager that SIGHUPs event_manager when database settings change
+* Minor changes to cURL handle instantiation/cleanup to handle odd behavior during lulls

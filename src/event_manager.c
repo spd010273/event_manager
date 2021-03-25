@@ -627,12 +627,20 @@ static void _queue_loop( struct worker * me )
 
     if( single_step_only )
     {
+#ifdef ALLOW_CONFIG_MANAGER
+        if( me->type == WORKER_TYPE_CONFIG_MANAGER )
+            return;
+#endif // ALLOW_CONFIG_MANAGER
         _log( LOG_LEVEL_DEBUG, "Single stepping dequeue function." );
         me->dequeue_function( me );
         return;
     }
 
     // Dequeue result will be -1 for error, 0 for empty queue, 1 for success
+#ifdef ALLOW_CONFIG_MANAGER
+    if( me->type != WORKER_TYPE_CONFIG_MANAGER )
+    {
+#endif // ALLOW_CONFIG_MANAGER
     dequeue_result = me->dequeue_function( me );
 
     while( dequeue_result != 0 )
@@ -660,6 +668,9 @@ static void _queue_loop( struct worker * me )
 
         processed_count = 0;
     }
+#ifdef ALLOW_CONFIG_MANAGER
+    }
+#endif // ALLOW_CONFIG_MANAGER
 
     listen_command = ( char * ) calloc(
         ( strlen( me->channel ) + 10 ),
@@ -699,7 +710,7 @@ static void _queue_loop( struct worker * me )
     {
 #ifdef BLOCKING_SELECT
         sigset_t signal_set;
-#endif
+#endif // BLOCKING_SELECT
         int sock;
         fd_set input_mask;
 
@@ -733,7 +744,7 @@ static void _queue_loop( struct worker * me )
         sigaddset( &signal_set, SIGTERM );
         sigaddset( &signal_set, SIGINT );
         sigaddset( &signal_set, SIGHUP );
-#endif
+#endif // BLOCKING_SELECT
         sock = PQsocket( me->conn );
 
         if( sock < 0 )
@@ -745,12 +756,12 @@ static void _queue_loop( struct worker * me )
         FD_SET( sock, &input_mask );
 #ifdef BLOCKING_SELECT
         sigprocmask( SIG_BLOCK, &signal_set, NULL );
-#endif
+#endif // BLOCKING_SELECT
         if( select( sock + 1, &input_mask, NULL, NULL, NULL ) < 0 )
         {
 #ifdef BLOCKING_SELECT
             sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
-#endif
+#endif // BLOCKING_SELECT
             _log(
                 LOG_LEVEL_WARNING,
                 "select() failed: %s",
@@ -759,7 +770,7 @@ static void _queue_loop( struct worker * me )
         }
 #ifdef BLOCKING_SELECT
         sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
-#endif
+#endif // BLOCKING_SELECT
         // We will get dumped here on SIGHUP, and need to re-enter the
         // _queue_loop function to re-establish all handles
         if( me->conn != NULL )
@@ -1317,6 +1328,62 @@ static int work_queue_handler( struct worker * me )
 
     return 1;
 }
+
+#ifdef ALLOW_CONFIG_MANAGER
+/*
+ * static void _config_manager_loop( void * data )
+ *     sleep loop that waits for config updates. Allows event manager to get
+ *     SIGHUP'ed from the database whenever configuration settings are changed.
+ *
+ * Arguments:
+ *     void * data: a struct worker * cast to void. This is expected to be of
+ *                  the Config Manager type
+ * Returns:
+ *     none
+ * Error Conditions:
+ *
+ */
+static int _config_manager_loop( struct worker * me )
+{
+    // Validation boilerplate, make sure the right process in in this sub
+    _log(
+        LOG_LEVEL_DEBUG,
+        "Config manager started with pid %d, data %p",
+        getpid(),
+        me
+    );
+
+    if( me == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Invalid PID slot provided to config loop"
+        );
+    }
+
+    if( me->pid != getpid() )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "PID mismatch: %d received workers entry belonging to %d",
+            getpid(),
+            me->pid
+        );
+    }
+
+    if( me->type != WORKER_TYPE_CONFIG_MANAGER )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Worker of type %d entered config manager routine",
+            me->type
+        );
+    }
+
+    //TODO Handle config update - issue SIGHUP to all workers and parent
+    return 1;
+}
+#endif // ALLOW_CONFIG_MANAGER
 
 /*
  * char * get_column_value( int row, PGresult * result, char * column_name )
@@ -2411,6 +2478,18 @@ int main( int argc, char ** argv )
         );
     }
 
+#ifdef ALLOW_CONFIG_MANAGER
+    _log( LOG_LEVEL_DEBUG, "Starting config manager" );
+    new_worker(
+        WORKER_TYPE_CONFIG_MANAGER,
+        0,
+        &_queue_loop_wrapper,
+        argc,
+        argv,
+        config
+    );
+#endif // ALLOW_CONFIG_MANAGER
+
     last_stat_update = time( NULL );
 
     while( 1 )
@@ -2976,8 +3055,11 @@ static void _queue_loop_wrapper( void * data )
 
     if( data == NULL )
     {
-        _log( LOG_LEVEL_FATAL, "ERROR, Process %d started with empty pid table slice", getpid() );
-        exit( 1 );
+        _log(
+            LOG_LEVEL_FATAL,
+            "ERROR, Process %d started with empty pid table slice",
+            getpid()
+        );
     }
 
     me = ( struct worker * ) data;
@@ -3025,6 +3107,13 @@ static void _queue_loop_wrapper( void * data )
             me->enable_curl = false;
         }
     }
+#ifdef ALLOW_CONFIG_MANAGER
+    else if( me->type == WORKER_TYPE_CONFIG_MANAGER )
+    {
+        me->channel          = CONFIG_MANAGER_CHANNEL;
+        me->dequeue_function = &_config_manager_loop;
+    }
+#endif // ALLOW_CONFIG_MANAGER
     else
     {
         _log(
@@ -3051,8 +3140,6 @@ static void _queue_loop_wrapper( void * data )
             LOG_LEVEL_FATAL,
             "Failed to initialize DB connection"
         );
-
-        return;
     }
 
     PQclear( conn_test );
@@ -3073,6 +3160,9 @@ static void _queue_loop_wrapper( void * data )
                 me->type == WORKER_TYPE_PARENT ? "PARENT" :
                 me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
                 me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
+#ifdef ALLOW_CONFIG_MANAGER
+                me->type == WORKER_TYPE_CONFIG_MANAGER ? "CONFIG" :
+#endif // ALLOW_CONFIG_MANAGER
                 "Unknown"
         );
         _queue_loop( me );
@@ -3083,6 +3173,9 @@ static void _queue_loop_wrapper( void * data )
                 me->type == WORKER_TYPE_PARENT ? "PARENT" :
                 me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
                 me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
+#ifdef ALLOW_CONFIG_MANAGER
+                me->type == WORKER_TYPE_CONFIG_MANAGER ? "CONFIG" :
+#endif // ALLOW_CONFIG_MANAGER
                 "Unknown"
         );
 
@@ -3126,6 +3219,12 @@ static void _set_application_name( struct worker * me )
     {
         malloc_size += strlen( WORKER_TITLE_WORK_PROCESSOR );
     }
+#ifdef ALLOW_CONFIG_MANAGER
+    else if( me->type == WORKER_TYPE_CONFIG_MANAGER )
+    {
+        malloc_size += strlen( WORKER_TITLE_CONFIG_MANAGER );
+    }
+#endif // ALLOW_CONFIG_MANAGER
     else
     {
         return;
@@ -3163,13 +3262,27 @@ static void _set_application_name( struct worker * me )
             strlen( WORKER_TITLE_EVENT_PROCESSOR )
         );
     }
-    else
+    else if( me->type == WORKER_TYPE_WORK_PROCESSOR )
     {
         strncat(
             application_name_command,
             WORKER_TITLE_WORK_PROCESSOR,
             strlen( WORKER_TITLE_WORK_PROCESSOR )
         );
+    }
+#ifdef ALLOW_CONFIG_MANAGER
+    else if( me->type == WORKER_TYPE_CONFIG_MANAGER )
+    {
+        strncat(
+            application_name_command,
+            WORKER_TITLE_CONFIG_MANAGER,
+            strlen( WORKER_TITLE_CONFIG_MANAGER )
+        );
+    }
+#endif // ALLOW_CONFIG_MANAGER
+    else
+    {
+        return;
     }
 
     strncat( application_name_command, "'\0", 2 );
@@ -3197,10 +3310,10 @@ static void _set_application_name( struct worker * me )
 
 static bool _get_advisory_lock( struct worker * me )
 {
-    char * params[2]  = {NULL};
-    PGresult * result = NULL;
-    char   pid[64]     = {0};
-    char * adv_result = NULL;
+    char *     params[2]   = {NULL};
+    PGresult * result      = NULL;
+    char       pid[64]     = {0};
+    char *     adv_result  = NULL;
 
     if( me->conn == NULL )
     {
@@ -3215,6 +3328,12 @@ static bool _get_advisory_lock( struct worker * me )
     {
         params[0] = "event_manager.tb_event_queue";
     }
+#ifdef ALLOW_CONFIG_MANAGER
+    else if( me->type == WORKER_TYPE_CONFIG_MANAGER )
+    {
+        params[0] = "event_manager.tb_setting";
+    }
+#endif // ALLOW_CONFIG_MANAGER
     else
     {
         return true;

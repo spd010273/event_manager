@@ -37,6 +37,12 @@
 #include <time.h>
 #include <sys/time.h>
 
+#define VERSION 1
+
+#if defined VERSION & VERSION >= 2
+#define ALLOW_CONFIG_MANAGER
+#endif // VERSION
+
 #define LOG_LEVEL_WARNING "WARNING"
 #define LOG_LEVEL_ERROR "ERROR"
 #define LOG_LEVEL_FATAL "FATAL"
@@ -56,10 +62,16 @@
 #define WORKER_TYPE_EVENT_PROCESSOR 1
 #define WORKER_TYPE_WORK_PROCESSOR 2
 #define WORKER_TYPE_PARENT 3
+#ifdef ALLOW_CONFIG_MANAGER
+#define WORKER_TYPE_CONFIG_MANAGER 4
+#endif // ALLOW_CONFIG_MANAGER
 
 #define WORKER_TITLE_EVENT_PROCESSOR "event queue processor"
 #define WORKER_TITLE_WORK_PROCESSOR "work queue processor"
 #define WORKER_TITLE_PARENT "Event Manager parent process"
+#ifdef ALLOW_CONFIG_MANAGER
+#define WORKER_TITLE_CONFIG_MANAGER "Event Manager config manager"
+#endif // ALLOW_CONFIG_MANAGER
 
 #define LOG_FILE_NAME "/var/log/event_manager/event_manager.log"
 
@@ -138,6 +150,9 @@ volatile sig_atomic_t got_sigint;
 
 struct worker ** workers;
 struct worker * parent;
+#ifdef ALLOW_CONFIG_MANAGER
+struct worker * config;
+#endif // ALLOW_CONFIG_MANAGER
 
 void _parse_args( int, char ** );
 void _usage( char * ) __attribute__ ((noreturn));

@@ -13,8 +13,6 @@
 
 #include "util.h"
 
-#define VERSION 0.1
-
 struct worker ** workers          = NULL;
 struct worker *  parent           = NULL;
 char *           conninfo         = NULL;
@@ -91,7 +89,7 @@ void _parse_args( int argc, char ** argv )
             case '?':
                 _usage( NULL );
             case 'v':
-                printf( "Event Manager, version %f\n", (float) VERSION );
+                printf( "Event Manager, version %f\n", ( (float) VERSION ) / 10.0 );
                 exit( 0 );
             case 'E':
                 event_job_count = optarg;
@@ -334,7 +332,7 @@ void _log( char * log_level, char * message, ... )
 #ifndef DEBUG
     if( strcmp( log_level, LOG_LEVEL_DEBUG ) != 0 )
     {
-#endif
+#endif // DEBUG
         fprintf(
             output_handle,
             "%s.%03d ",
@@ -366,14 +364,13 @@ void _log( char * log_level, char * message, ... )
         );
 #ifndef DEBUG
     }
-#endif
+#endif // DEBUG
 
     va_end( args );
     fflush( output_handle );
 
     if( strcmp( log_level, LOG_LEVEL_FATAL ) == 0 )
     {
-        //free( conninfo );
         __term();
     }
 
@@ -693,7 +690,8 @@ void _register_signal_handlers( void )
  *     unsigned_short type: Worker type, either:
  *              WORKER_TYPE_PARENT,
  *              WORKER_TYPE_WORK_PROCESSOR
- *           or WORKER_TYPE_EVENT_PROCESSOR
+ *              WORKER_TYPE_EVENT_PROCESSOR
+ *           or WORKER_TYPE_CONFIG_MANAGER
  *                          which determines what type of table entry is
  *                          created, and whether a fork() should happen.
  *     int id:              Array index for the process in the workers array
@@ -758,6 +756,9 @@ struct worker * new_worker(
             type != WORKER_TYPE_PARENT
          && type != WORKER_TYPE_WORK_PROCESSOR
          && type != WORKER_TYPE_EVENT_PROCESSOR
+#ifdef ALLOW_CONFIG_MANAGER
+         && type != WORKER_TYPE_CONFIG_MANAGER
+#endif // ALLOW_CONFIG_MANAGER
       )
     {
         _log(
@@ -814,7 +815,18 @@ struct worker * new_worker(
 
     // prep to copy FH
     _log( LOG_LEVEL_DEBUG, "Remapped PID table slot %u to %p", id, result );
+#ifdef ALLOW_CONFIG_MANAGER
+    if( type == WORKER_TYPE_CONFIG_MANAGER )
+    {
+        config = result;
+    }
+    else
+    {
+#endif // ALLOW_CONFIG_MANAGER
     workers[id] = result;
+#ifdef ALLOW_CONFIG_MANAGER
+    }
+#endif // ALLOW_CONFIG_MANAGER
 
     pid = fork();
 
@@ -827,8 +839,8 @@ struct worker * new_worker(
 
         if( data != NULL )
         {
-            ( ( struct worker * ) data )->my_argc  = argc;
-            ( ( struct worker * ) data )->my_argv  = argv;
+            ( ( struct worker * ) data )->my_argc = argc;
+            ( ( struct worker * ) data )->my_argv = argv;
         }
 
 #ifdef DEBUG
@@ -840,8 +852,13 @@ struct worker * new_worker(
         _set_process_title(
             argv,
             argc,
-            ( ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR )
-                ? WORKER_TITLE_EVENT_PROCESSOR : WORKER_TITLE_WORK_PROCESSOR,
+            ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR ? WORKER_TITLE_EVENT_PROCESSOR
+          : ( ( struct worker * ) data )->type == WORKER_TYPE_WORK_PROCESSOR  ? WORKER_TITLE_WORK_PROCESSOR
+#ifdef ALLOW_CONFIG_MANAGER
+          : WORKER_TITLE_CONFIG_MANAGER,
+#else
+          : 0,
+#endif // ALLOW_CONFIG_MANAGER
             &max_argv_size
         );
 
@@ -862,7 +879,7 @@ struct worker * new_worker(
     return result;
 }
 
-void  _gather_child_stats_to_self( struct em_stat ** stats )
+void _gather_child_stats_to_self( struct em_stat ** stats )
 {
     struct worker *  me = NULL;
     unsigned int     i  = 0;
@@ -921,6 +938,10 @@ void  _gather_child_stats_to_self( struct em_stat ** stats )
             w->tx_success  += workers[i]->tx_success;
             w->tx_fail     += workers[i]->tx_fail;
             w->tx_duration += workers[i]->tx_duration;
+        }
+        else
+        {
+            continue;
         }
 
         workers[i]->tx_success  = 0;

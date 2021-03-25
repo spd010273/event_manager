@@ -37,6 +37,9 @@
 // Channels
 #define EVENT_QUEUE_CHANNEL "new_event_queue_item"
 #define WORK_QUEUE_CHANNEL "new_work_queue_item"
+#ifdef ALLOW_CONFIG_MANAGER
+#define CONFIG_MANAGER_CHANNEL "configuration_update"
+#endif // ALLOW_CONFIG_MANAGER
 
 // GUCs
 #define DEFAULT_WHEN_GUC_NAME "default_when_function"
@@ -92,6 +95,9 @@ static bool execute_action_query( struct worker *, struct action_result * );
 static bool execute_remote_uri_call( struct worker *, struct action_result * );
 static bool set_uid( struct worker *, char *, char * );
 static size_t _curl_write_callback( void *, size_t, size_t, void * );
+#ifdef ALLOW_CONFIG_MANAGER
+static int _config_manager_loop( struct worker * );
+#endif // ALLOW_CONFIG_MANAGER
 
 // Helper functions
 static PGresult * _execute_query( struct worker *, char *, char **, int );
