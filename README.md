@@ -66,6 +66,10 @@ Actions are either local database modification or remote API calls that happen a
 7. Run 'CREATE EXTENSION event_manager;'
 8. Start event_manager with 'systemctl start event_manager'
 
+## Settings
+
+It is important that event_manager.tb_setting contains appropriate values for your environment. This is especially important if there are events that make API calls. As of version 0.2, event_manager will SIGHUP the queue processors from the database if tb_setting is updated. This will force the workers to reconnect to the database and receive new GUC values (the reconnect is necessary as some poolers cache GUC values)
+
 ## Changelog
 
 ### Version 0.1
@@ -73,4 +77,4 @@ Initial Version
 
 ### Version 0.2
 * Add configuration manager that SIGHUPs event_manager when database settings change
-* Minor changes to cURL handle instantiation/cleanup to handle odd behavior during lulls
+* Minor changes to cURL handle instantiation/cleanup to handle odd behavior during lulls (in progress)

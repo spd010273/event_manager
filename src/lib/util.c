@@ -871,7 +871,6 @@ struct worker * new_worker(
     else if( pid < 0 )
     {
         _log( LOG_LEVEL_FATAL, "Fork Failed" );
-        return NULL;
     }
 
     result->pid = pid;
