@@ -46,6 +46,8 @@
 #define SET_UID_GUC_NAME "set_uid_function"
 #define GET_UID_GUC_NAME "get_uid_function"
 #define ASYNC_GUC_NAME "execute_asynchronously"
+#define BASE_URL_GUC_NAME "base_url"
+#define SESSION_GUCS_NAME "session_gucs"
 
 // Regular Expression Settings
 #define MAX_REGEX_GROUPS 1

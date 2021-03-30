@@ -716,6 +716,8 @@ struct worker * new_worker(
     struct worker * result = NULL;
     pid_t           pid    = 0;
     size_t          size   = 0;
+    void *          data   = NULL;
+    struct worker * worker = NULL;
 
     // Iff workerslot is provided, we reuse that SHM space
     if( workerslot == NULL )
@@ -832,33 +834,31 @@ struct worker * new_worker(
 
     if( pid == 0 ) // child
     {
-        void * data;
-
         // Get shm struct
         data = ( void * ) get_worker_by_pid();
+        worker = ( struct worker * ) data;
 
         if( data != NULL )
         {
-            ( ( struct worker * ) data )->my_argc = argc;
-            ( ( struct worker * ) data )->my_argv = argv;
+            worker->my_argc = argc;
+            worker->my_argv = argv;
         }
 
 #ifdef DEBUG
         _log( LOG_LEVEL_DEBUG, "child argv: %p argc: %d", argv, argc );
         _log( LOG_LEVEL_DEBUG, "Post fork, got data %p", data );
+        _debug_worker_slot( worker );
 #endif // DEBUG
 
-        // Register signal handlers
         _set_process_title(
             argv,
             argc,
-            ( ( struct worker * ) data )->type == WORKER_TYPE_EVENT_PROCESSOR ? WORKER_TITLE_EVENT_PROCESSOR
-          : ( ( struct worker * ) data )->type == WORKER_TYPE_WORK_PROCESSOR  ? WORKER_TITLE_WORK_PROCESSOR
+            worker->type == WORKER_TYPE_EVENT_PROCESSOR ? WORKER_TITLE_EVENT_PROCESSOR :
+            worker->type == WORKER_TYPE_WORK_PROCESSOR  ? WORKER_TITLE_WORK_PROCESSOR :
 #ifdef ALLOW_CONFIG_MANAGER
-          : WORKER_TITLE_CONFIG_MANAGER,
-#else
-          : 0,
+            worker->type == WORKER_TYPE_CONFIG_MANAGER  ? WORKER_TITLE_CONFIG_MANAGER :
 #endif // ALLOW_CONFIG_MANAGER
+            "UNKNOWN",
             &max_argv_size
         );
 
@@ -1287,6 +1287,13 @@ struct worker * get_worker_by_pid()
     {
         return parent;
     }
+
+#ifdef ALLOW_CONFIG_MANAGER
+    if( config != NULL && pid == config->pid )
+    {
+        return config;
+    }
+#endif // ALLOW_CONFIG_MANAGER
 
     // Search workers array
     if( workers != NULL )
@@ -1794,7 +1801,12 @@ void _debug_worker_slot( struct worker * worker )
         worker->curl_handle,
         (int) worker->pid,
         worker->type == WORKER_TYPE_PARENT ? "PARENT" :
-            worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" : "WORK",
+            worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" : 
+            worker->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
+#ifdef ALLOW_CONFIG_MANAGER
+            worker->type == WORKER_TYPE_CONFIG_MANAGER ? "CONFIG " :
+#endif // ALLOW_CONFIG_MANAGER
+            "UNKNOWN",
         worker->tx_in_progress == true ? "YES" : "NO",
         worker->enable_curl == true ? "YES" : "NO",
         worker->status == STATUS_DEAD ? "DEAD" :

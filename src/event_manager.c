@@ -1381,7 +1381,16 @@ static int _config_manager_loop( struct worker * me )
     }
 
     //TODO Handle config update - issue SIGHUP to all workers and parent
-    return 1;
+    if( parent == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Parent PID slice is NULL"
+        );
+    }
+
+    kill( parent->pid, SIGHUP );
+    return 0;
 }
 #endif // ALLOW_CONFIG_MANAGER
 
@@ -2486,7 +2495,7 @@ int main( int argc, char ** argv )
         &_queue_loop_wrapper,
         argc,
         argv,
-        config
+        NULL
     );
 #endif // ALLOW_CONFIG_MANAGER
 
@@ -3146,6 +3155,7 @@ static void _queue_loop_wrapper( void * data )
     _set_application_name( me );
     // Start main loop
     me->status = STATUS_WORKING;
+
     while( 1 )
     {
         if( me->conn == NULL )

@@ -3,7 +3,7 @@ PGLIBDIR     = $(shell pg_config --libdir)
 PGINCLUDEDIR = $(shell pg_config --includedir)
 CC           = gcc
 LIBS         = -lm -lpq -lcurl
-#DEBUG		 = -g -DDEBUG
+DEBUG		 = -g -DDEBUG
 PG_CPPFLAGS	 = -I./src/ -I./src/lib/ -I$(PGINCLUDEDIR) $(DEBUG) $(LIBS)
 
 event_manager: src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o
@@ -16,9 +16,6 @@ EXTRA_CLEAN = src/event_manager.o event_manager src/lib/*.o
 DATA        = $(wildcard sql/$(EXTENSION)--*.sql)
 
 PGXS := $(shell $(PG_CONFIG) --pgxs)
-
-check:
-	./run_tests -M -D
 
 installcheck:
 	./run_tests -M -D

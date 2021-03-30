@@ -40,7 +40,7 @@ CREATE OR REPLACE FUNCTION @extschema@.fn_set_configuration()
 RETURNS TRIGGER AS
  $_$
 BEGIN
-    IF( NEW.key NOT LIUKE '@extschema@.%' ) THEN
+    IF( NEW.key NOT ILIKE '@extschema@.%' ) THEN
         RAISE EXCEPTION '% is not an extension GUC and cannot be modified using this table', NEW.key;
     END IF;
 

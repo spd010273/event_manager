@@ -70,7 +70,7 @@
 #define WORKER_TITLE_WORK_PROCESSOR "work queue processor"
 #define WORKER_TITLE_PARENT "Event Manager parent process"
 #ifdef ALLOW_CONFIG_MANAGER
-#define WORKER_TITLE_CONFIG_MANAGER "Event Manager config manager"
+#define WORKER_TITLE_CONFIG_MANAGER "config manager"
 #endif // ALLOW_CONFIG_MANAGER
 
 #define LOG_FILE_NAME "/var/log/event_manager/event_manager.log"
