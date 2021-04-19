@@ -41,6 +41,7 @@
 
 #if defined VERSION & VERSION >= 2
 #define ALLOW_CONFIG_MANAGER
+#define REDEF_CURL_HANDLE
 #endif // VERSION
 
 #define LOG_LEVEL_WARNING "WARNING"

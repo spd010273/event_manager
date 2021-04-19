@@ -1561,6 +1561,31 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         return false;
     }
 
+#ifdef REDEF_CURL_HANDLE
+    me->curl_handle = curl_easy_init();
+
+    if( me->curl_handle != NULL )
+    {
+        me->enable_curl = true;
+        curl_easy_setopt( me->curl_handle, CURLOPT_NOSIGNAL, 1 );
+        curl_easy_setopt(
+            me->curl_handle,
+            CURLOPT_USERAGENT,
+            ( char * ) user_agent
+        );
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "JIT cURL initialization failed. Aborting URI call." \
+            " cURL will be disabled for this worker"
+        );
+        me->enable_curl = false;
+        return false;
+    }
+#endif // REDEF_CURL_HANDLE
+
     // Replace any bindpoints that may exist in the uri prior to appending a parameter list
     _bind_uri_arguments( &(action->uri), action->parameters, NULL );
 
@@ -1574,6 +1599,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             "Unable to allocate memory for parameters"
         );
 
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1595,6 +1624,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             LOG_LEVEL_ERROR,
             "Failed to add JSON parameters to param list"
         );
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1610,6 +1643,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
                 "Unable to allocate memory for simple string "
                 " concatenation operation :("
             );
+#ifdef REDEF_CURL_HANDLE
+            curl_easy_cleanup( me->curl_handle );
+            me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
             return false;
         }
 
@@ -1628,6 +1665,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
                 LOG_LEVEL_ERROR,
                 "Failed to substitute parameters in URI parameter list"
             );
+#ifdef REDEF_CURL_HANDLE
+            curl_easy_cleanup( me->curl_handle );
+            me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
             return false;
         }
     }
@@ -1644,6 +1685,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
                 "Unable to allocate memory for simple string"
                 "concatenation operation :("
             );
+#ifdef REDEF_CURL_HANDLE
+            curl_easy_cleanup( me->curl_handle );
+            me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
             return false;
         }
 
@@ -1662,6 +1707,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
                 LOG_LEVEL_ERROR,
                 "Failed to substitute session_values in URI parameter list"
             );
+#ifdef REDEF_CURL_HANDLE
+            curl_easy_cleanup( me->curl_handle );
+            me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
             return false;
         }
     }
@@ -1723,6 +1772,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             action->method
         );
 
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1733,6 +1786,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             "Failed to set curl method: %s",
             curl_easy_strerror( response )
         );
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1743,6 +1800,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
     {
         //Really? You dont have 1 byte?
         _log( LOG_LEVEL_ERROR, "Failed to allocate memory for write buffer" );
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1765,6 +1826,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             );
             free( param_list );
             free( write_buffer.pointer );
+#ifdef REDEF_CURL_HANDLE
+            curl_easy_cleanup( me->curl_handle );
+            me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
             return false;
         }
 
@@ -1813,6 +1878,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             LOG_LEVEL_ERROR,
             "Failed to set cURLopts"
         );
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1885,6 +1954,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             }
         }
 
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1906,6 +1979,10 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         );
 
         // We could probably put a special handler for HTTP timeouts
+#ifdef REDEF_CURL_HANDLE
+        curl_easy_cleanup( me->curl_handle );
+        me->curl_handle = NULL;
+#endif // REDEF_CURL_HANDLE
         return false;
     }
 
@@ -1938,6 +2015,11 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         }
     }
 
+#ifdef REDEF_CURL_HANDLE
+    curl_easy_cleanup( me->curl_handle );
+    me->curl_handle = NULL;
+    // curl_global_cleanup();
+#endif // REDEF_CURL_HANDLE
     return true;
 }
 
@@ -3094,6 +3176,7 @@ static void _queue_loop_wrapper( void * data )
     {
         me->dequeue_function = &work_queue_handler;
         me->channel          = WORK_QUEUE_CHANNEL;
+#ifndef REDEF_CURL_HANDLE
         me->curl_handle      = curl_easy_init();
 
         if( me->curl_handle != NULL  )
@@ -3115,6 +3198,7 @@ static void _queue_loop_wrapper( void * data )
 
             me->enable_curl = false;
         }
+#endif // REDEF_CURL_HANDLE
     }
 #ifdef ALLOW_CONFIG_MANAGER
     else if( me->type == WORKER_TYPE_CONFIG_MANAGER )
