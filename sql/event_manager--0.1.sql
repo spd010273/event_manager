@@ -1,7 +1,7 @@
 /*-----------------------------------------------------------------------------
  *
  * event_manager--0.1.sql
- *     Event Manager extension schema
+ *     Event Manager extension schema for version 0.1
  *
  * Copyright (c) 2018, Nead Werx, Inc.
  *
@@ -810,7 +810,7 @@ BEGIN
 
     DROP TABLE tt_desired_triggers;
     DROP TABLE tt_existing_triggers;
-    
+
     RETURN;
 END
  $_$

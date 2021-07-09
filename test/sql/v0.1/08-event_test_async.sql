@@ -13,6 +13,8 @@ UPDATE eventmanagertest.tb_a
 DO
  $_$
 BEGIN
+    PERFORM pg_sleep( 2 );
+
     PERFORM *
        FROM event_manager.tb_event_queue
       WHERE new IS NOT NULL
@@ -57,6 +59,8 @@ SELECT pg_sleep(10);
 
 DO
  $_$
+DECLARE
+ my_record RECORD;
 BEGIN
     PERFORM *
        FROM event_manager.tb_event_queue;
@@ -66,11 +70,17 @@ BEGIN
         RETURN;
     END IF;
 
+    PERFORM pg_sleep( 5 );
+
     PERFORM *
        FROM event_manager.tb_work_queue;
 
     IF FOUND THEN
-        RAISE EXCEPTION 'FAILED: work queue not empty';
+        SELECT *
+          INTO my_record
+          FROM event_manager.tb_work_queue;
+
+        RAISE EXCEPTION 'FAILED: work queue not empty: %', my_record;
         RETURN;
     END IF;
 

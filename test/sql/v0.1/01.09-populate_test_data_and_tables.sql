@@ -31,14 +31,15 @@ INSERT INTO eventmanagertest.tb_b
             a.a
        FROM eventmanagertest.tb_a a;
 
-INSERT INTO event_manager.tb_setting( key, value )
+-- bare minimum for subsequent runs to pass
+INSERT INTO event_manager.tb_setting
+            (
+                key,
+                value
+            )
      VALUES ( 'event_manager.execute_asynchronously', 'true' ),
             ( 'event_manager.default_when_function', 'event_manager.fn_dummy_when_function' ),
-            ( 'event_manager.set_uid_function' , 'NULL' ),
-            ( 'event_manager.get_uid_function', 'NULL' ),
-            ( 'event_manager.session_gucs', 'event_manager.base_url' ),
-            ( 'event_manager.base_url', 'https://change_me/' );
-
+            ( 'event_manager.session_gucs', 'event_manager.base_url' );
 DO
  $_$
 DECLARE

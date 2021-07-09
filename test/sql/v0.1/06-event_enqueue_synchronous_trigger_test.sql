@@ -11,7 +11,6 @@ INSERT INTO eventmanagertest.tb_a
                 'synchronous_test'
             );
 
-
 DO
  $_$
 BEGIN

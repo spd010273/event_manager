@@ -68,6 +68,7 @@ static PGresult * _execute_query(
             _log( LOG_LEVEL_ERROR, "Failed to reconnect" );
             return NULL;
         }
+        _log( LOG_LEVEL_DEBUG, "Process %d reconnected to DB", getpid() );
     }
 
 #ifdef DEBUG
@@ -147,29 +148,35 @@ static PGresult * _execute_query(
     while(
              (
                  last_sql_state == NULL // No state (first pass)
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_TERMINATED_BY_ADMINISTRATOR
+                     SQL_STATE_TERMINATED_BY_ADMINISTRATOR,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CANCELED_BY_ADMINISTRATOR
+                     SQL_STATE_CANCELED_BY_ADMINISTRATOR,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CONNECTION_FAILURE
+                     SQL_STATE_CONNECTION_FAILURE,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+                     SQL_STATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CONNECTION_DOES_NOT_EXIST
+                     SQL_STATE_CONNECTION_DOES_NOT_EXIST,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CONNECTION_EXCEPTION
+                     SQL_STATE_CONNECTION_EXCEPTION,
+                     strlen( last_sql_state )
                  ) == 0
              )
           && retry_counter < MAX_CONN_RETRIES
@@ -182,21 +189,25 @@ static PGresult * _execute_query(
         if(
                last_sql_state != NULL
             && (
-                  strcmp(
+                  strncmp(
                      last_sql_state,
-                     SQL_STATE_CONNECTION_FAILURE
+                     SQL_STATE_CONNECTION_FAILURE,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+                     SQL_STATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CONNECTION_DOES_NOT_EXIST
+                     SQL_STATE_CONNECTION_DOES_NOT_EXIST,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CONNECTION_EXCEPTION
+                     SQL_STATE_CONNECTION_EXCEPTION,
+                     strlen( last_sql_state )
                  ) == 0
                )
           )
@@ -271,8 +282,13 @@ static PGresult * _execute_query(
                 );
             }
 
-            strcpy( last_sql_state, temp_last_sql_state );
+            strncpy(
+                last_sql_state,
+                temp_last_sql_state,
+                strlen( temp_last_sql_state )
+            );
 
+            last_sql_state[ strlen( temp_last_sql_state ) - 1] = '\0';
             if( result != NULL )
             {
                 PQclear( result );
@@ -293,13 +309,15 @@ static PGresult * _execute_query(
            retry_counter == 1
         && last_sql_state != NULL
         && (
-                 strcmp(
+                 strncmp(
                      last_sql_state,
-                     SQL_STATE_TERMINATED_BY_ADMINISTRATOR
+                     SQL_STATE_TERMINATED_BY_ADMINISTRATOR,
+                     strlen( last_sql_state )
                  ) == 0
-              || strcmp(
+              || strncmp(
                      last_sql_state,
-                     SQL_STATE_CANCELED_BY_ADMINISTRATOR
+                     SQL_STATE_CANCELED_BY_ADMINISTRATOR,
+                     strlen( last_sql_state )
                  ) == 0
            )
       )
@@ -615,6 +633,11 @@ static void _queue_loop( struct worker * me )
 {
     PGnotify * notify          = NULL;
     char *     listen_command  = NULL;
+#ifdef ALLOW_QUEUE_CHECK_WITH_GUC
+    PGresult * qc_result       = NULL;
+    char *     disable_queue   = NULL;
+    bool       dq_bool_result  = false;
+#endif // ALLOW_QUEUE_CHECK_WITH_GUC
     PGresult * listen_result   = NULL;
     int        processed_count = 0;
     int        dequeue_result  = 0;
@@ -641,33 +664,87 @@ static void _queue_loop( struct worker * me )
     if( me->type != WORKER_TYPE_CONFIG_MANAGER )
     {
 #endif // ALLOW_CONFIG_MANAGER
-    dequeue_result = me->dequeue_function( me );
-
-    while( dequeue_result != 0 )
-    {
-        if( dequeue_result > 0 )
+#ifdef ALLOW_QUEUE_CHECK_WITH_GUC
+        if( me->type == WORKER_TYPE_WORK_PROCESSOR )
         {
-            processed_count++;
+            _log( LOG_LEVEL_DEBUG, "WORK processor checking queue GUC" );
+            qc_result = _execute_query(
+                me,
+                ( char * ) check_work_queue_guc,
+                NULL,
+                0
+            );
+        }
+        else if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
+        {
+            _log( LOG_LEVEL_DEBUG, "EVENT processor checking queue GUC" );
+            qc_result = _execute_query(
+                me,
+                ( char * ) check_event_queue_guc,
+                NULL,
+                0
+            );
         }
 
-        dequeue_result = me->dequeue_function( me );
-
-        if( got_sighup )
+        if( qc_result != NULL )
         {
-            _child_handle_sighup();
+            disable_queue = get_column_value( 0, qc_result, "value" );
+            if(
+                    disable_queue != NULL
+                 && (
+                         strncmp( disable_queue, "t", 1 ) == 0
+                      || strncmp( disable_queue, "T", 1 ) == 0
+                    )
+              )
+            {
+                dq_bool_result = true;
+            }
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Queue for %s is %s (raw result %s)",
+                me == NULL ? "NULL" :
+                me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
+                me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
+                me->type == WORKER_TYPE_PARENT ? "PARENT" :
+                "Unknown",
+                dq_bool_result ? "DISABLED" : "ENABLED",
+                disable_queue
+            );
+
+            PQclear( qc_result );
+            disable_queue = NULL;
         }
-    }
 
-    if( processed_count > 0 )
-    {
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Processed %d queue entries prior to main loop",
-            processed_count
-        );
 
-        processed_count = 0;
-    }
+        if( dq_bool_result == false )
+        {
+#endif // ALLOW_QUEUE_CHECK_WITH_GUC
+            dequeue_result = me->dequeue_function( me );
+
+            while( dequeue_result != 0 )
+            {
+                if( dequeue_result > 0 )
+                {
+                    processed_count++;
+                }
+
+                dequeue_result = me->dequeue_function( me );
+            }
+
+            if( processed_count > 0 )
+            {
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "Processed %d queue entries prior to main loop",
+                    processed_count
+                );
+
+                processed_count = 0;
+            }
+#ifdef ALLOW_QUEUE_CHECK_WITH_GUC
+        }
+#endif // ALLOW_QUEUE_CHECK_WITH_GUC
 #ifdef ALLOW_CONFIG_MANAGER
     }
 #endif // ALLOW_CONFIG_MANAGER
@@ -686,9 +763,13 @@ static void _queue_loop( struct worker * me )
     }
 
     /* Command: 'LISTEN "?"\0' */
-    strcpy( listen_command, "LISTEN \"" );
-    strcat( listen_command, ( const char * ) me->channel );
-    strcat( listen_command, "\"\0" );
+    strncpy( listen_command, "LISTEN \"", 8 );
+    strncat(
+        listen_command,
+        ( const char * ) me->channel,
+        strlen( me->channel )
+    );
+    strncat( listen_command, "\"\0", 2 );
 
     listen_result = _execute_query(
         me,
@@ -700,9 +781,7 @@ static void _queue_loop( struct worker * me )
     free( listen_command );
 
     if( listen_result == NULL )
-    {
         return;
-    }
 
     PQclear( listen_result );
 
@@ -715,30 +794,29 @@ static void _queue_loop( struct worker * me )
         fd_set input_mask;
 
         if( got_sigterm )
-        {
-            _log(
-                LOG_LEVEL_ERROR,
-                "Exiting after receiving SIGTERM"
-            );
-
-            break;
-        }
+            __term();
 
         if( got_sighup )
         {
             _child_handle_sighup();
-            _log(
-                LOG_LEVEL_DEBUG,
-                "restarting main loop after SIGHUP"
-            );
             break;
         }
 
-        if( difftime( time( NULL ), me->last_heartbeat ) > MAX_HEARTBEAT_DURATION )
-        {
-            // Parent is dead! Long live SystemD!
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+        me = get_worker_by_pid();
+
+        // See if we've been pruned
+        if( me->commanded_shutdown )
             __term();
-        }
+
+        // check for updated workers[] pointer
+        if( me->commanded_refresh )
+            _child_update_pointers();
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
+
+        // Parent is dead! Long live SystemD!
+        if( difftime( time( NULL ), me->last_heartbeat ) > MAX_HEARTBEAT_DURATION )
+            __term();
 
 #ifdef BLOCKING_SELECT
         sigaddset( &signal_set, SIGTERM );
@@ -748,10 +826,9 @@ static void _queue_loop( struct worker * me )
         sock = PQsocket( me->conn );
 
         if( sock < 0 )
-        {
             break;
-        }
 
+        errno = 0;
         FD_ZERO( &input_mask );
         FD_SET( sock, &input_mask );
 #ifdef BLOCKING_SELECT
@@ -762,15 +839,26 @@ static void _queue_loop( struct worker * me )
 #ifdef BLOCKING_SELECT
             sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 #endif // BLOCKING_SELECT
-            _log(
-                LOG_LEVEL_WARNING,
-                "select() failed: %s",
-                strerror( errno )
-            );
+            if( !got_sighup && errno == 4 ) // Interrupted System Call
+            {
+                _log(
+                    LOG_LEVEL_WARNING,
+                    "select() failed: %s",
+                    strerror( errno )
+                );
+                return;
+            }
+            else if( got_sighup )
+            {
+                _child_handle_sighup();
+                return;
+            }
         }
 #ifdef BLOCKING_SELECT
         sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 #endif // BLOCKING_SELECT
+        errno = 0;
+
         // We will get dumped here on SIGHUP, and need to re-enter the
         // _queue_loop function to re-establish all handles
         if( me->conn != NULL )
@@ -803,6 +891,7 @@ static void _queue_loop( struct worker * me )
                     if( got_sighup )
                     {
                         _child_handle_sighup();
+                        return;
                     }
                 }
 
@@ -821,17 +910,14 @@ static void _queue_loop( struct worker * me )
                     LOG_LEVEL_ERROR,
                     "Exiting after receiving SIGTERM"
                 );
-                break;
+                _log( LOG_LEVEL_DEBUG, "Child %d breaking loop after SIGTERM", getpid() );
+                __term();
             }
 
             if( got_sighup )
             {
                 _child_handle_sighup();
-                _log(
-                    LOG_LEVEL_DEBUG,
-                    "Restarting main loop after SIGHUP"
-                );
-                break;
+                return;
             }
 
             if( single_step_only )
@@ -840,8 +926,7 @@ static void _queue_loop( struct worker * me )
                     LOG_LEVEL_INFO,
                     "exiting after single stepping..."
                 );
-
-                break;
+                return;
             }
         }
     }
@@ -1013,7 +1098,6 @@ static int event_queue_handler( struct worker * me )
             "Failed to execute work item query"
         );
 
-        PQclear( result );
         params[0] = event_table_work_item;
         params[1] = uid;
         params[2] = recorded;
@@ -1049,6 +1133,7 @@ static int event_queue_handler( struct worker * me )
                     "Failed to mark failed event item"
                 );
             }
+            PQclear( update_result );
         }
         else
         {
@@ -1063,6 +1148,7 @@ static int event_queue_handler( struct worker * me )
             }
         }
 
+        PQclear( result );
         return -1;
     }
 
@@ -1348,7 +1434,7 @@ static int _config_manager_loop( struct worker * me )
     // Validation boilerplate, make sure the right process in in this sub
     _log(
         LOG_LEVEL_DEBUG,
-        "Config manager started with pid %d, data %p",
+        "Config manager handling remote SIGHUP with pid %d, data %p",
         getpid(),
         me
     );
@@ -1380,7 +1466,6 @@ static int _config_manager_loop( struct worker * me )
         );
     }
 
-    //TODO Handle config update - issue SIGHUP to all workers and parent
     if( parent == NULL )
     {
         _log(
@@ -1550,6 +1635,7 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
     unsigned int         malloc_size   = 2;
     long int             response_code = 0;
     unsigned short       retry_count   = 0;
+    unsigned short       method_len    = 0;
 
     if( action == NULL )
     {
@@ -1606,9 +1692,13 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         return false;
     }
 
-    if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
+    method_len = strlen( action->method );
+    if(
+        strncmp( action->method, "GET", MIN( method_len, 3 ) ) == 0
+     || strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0
+      )
     {
-        strcpy( param_list, "?" );
+        strncpy( param_list, "?", 1 );
     }
 
     param_list = _add_json_parameters_to_param_list(
@@ -1650,7 +1740,7 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             return false;
         }
 
-        strcat( param_list, "&" );
+        strncat( param_list, "&", 1 );
 
         param_list = _add_json_parameters_to_param_list(
             me->curl_handle,
@@ -1692,7 +1782,7 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             return false;
         }
 
-        strcat( param_list, "&" );
+        strncat( param_list, "&", 1 );
 
         param_list = _add_json_parameters_to_param_list(
             me->curl_handle,
@@ -1741,12 +1831,12 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         action->method
     );
 
-    if( strcmp( action->method, "GET" ) == 0 )
+    if( strncmp( action->method, "GET", MIN( method_len, 3 ) ) == 0 )
     {
         _log( LOG_LEVEL_DEBUG, "Setting GET method" );
         response = curl_easy_setopt( me->curl_handle, CURLOPT_HTTPGET, 1L );
     }
-    else if( strcmp( action->method, "PUT" ) == 0 )
+    else if( strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0 )
     {
         _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
         // CURLOPT_PUT is deprecated
@@ -1759,7 +1849,7 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         // a file. And the timeout doesn't seem to work either :)
         response = curl_easy_setopt( me->curl_handle, CURLOPT_CUSTOMREQUEST, "PUT" );
     }
-    else if( strcmp( action->method, "POST" ) == 0 )
+    else if( strncmp( action->method, "POST", MIN( method_len, 4 ) ) == 0 )
     {
         _log( LOG_LEVEL_DEBUG, "Setting POST method" );
         response = curl_easy_setopt( me->curl_handle, CURLOPT_POST, 1L );
@@ -1807,9 +1897,12 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         return false;
     }
 
-    write_buffer.size    = 0;
+    write_buffer.size = 0;
 
-    if( strcmp( action->method, "GET" ) == 0 || strcmp( action->method, "PUT" ) == 0 )
+    if(
+          strncmp( action->method, "GET", MIN( method_len, 3 ) ) == 0
+       || strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0
+      )
     {
         _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
 
@@ -1833,8 +1926,8 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             return false;
         }
 
-        strcpy( remote_call, action->uri );
-        strcat( remote_call, param_list );
+        strncpy( remote_call, action->uri, strlen( action->uri ) );
+        strncat( remote_call, param_list, strlen( param_list ) );
 
         _log(
             LOG_LEVEL_DEBUG,
@@ -1943,8 +2036,8 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         }
 
         if(
-              strcmp( action->method, "GET" ) == 0
-           || strcmp( action->method, "PUT" ) == 0
+              strncmp( action->method, "GET", MIN( method_len, 3 ) ) == 0
+           || strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0
           )
         {
             if( remote_call != NULL )
@@ -2004,8 +2097,8 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
     free( write_buffer.pointer );
 
     if(
-            strcmp( action->method, "GET" ) == 0
-         || strcmp( action->method, "PUT" ) == 0
+            strncmp( action->method, "GET", MIN( method_len, 3 ) ) == 0
+         || strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0
       )
     {
         if( remote_call != NULL )
@@ -2159,7 +2252,8 @@ static bool execute_action( struct worker * me, PGresult * result, int row )
             sizeof( char )
         );
 
-        strcpy( action.uri, uri );
+        strncpy( action.uri, uri, strlen( uri ) );
+        action.uri[strlen(uri)] = '\0';
     }
 
     if( is_column_null( row, result, "static_parameters" ) == false )
@@ -2177,7 +2271,7 @@ static bool execute_action( struct worker * me, PGresult * result, int row )
     action.query  = get_column_value( row, result, "query"   );
     use_ssl       = get_column_value( row, result, "use_ssl" );
 
-    if( strcmp( use_ssl, "t" ) == 0 || strcmp( use_ssl, "T" ) == 0 )
+    if( strncmp( use_ssl, "t", 1 ) == 0 || strncmp( use_ssl, "T", 1 ) == 0 )
     {
         action.use_ssl = true;
     }
@@ -2336,8 +2430,12 @@ static bool set_uid( struct worker * me, char * uid, char * session_values )
         );
     }
 
-    strcpy( set_uid_query, "SELECT " );
-    strcat( set_uid_query, uid_function_name );
+    strncpy( set_uid_query, "SELECT ", 7 );
+    strncat(
+        set_uid_query,
+        uid_function_name,
+        strlen( uid_function_name )
+    );
 
     set_uid_query_obj = _new_query( set_uid_query );
     free( set_uid_query );
@@ -2419,7 +2517,7 @@ int main( int argc, char ** argv )
 {
     PGresult *            result           = NULL;
     PGresult *            cyanaudit_result = NULL;
-    char *                params[1]        = {NULL};
+    char *                params[2]        = {NULL};
     register unsigned int tid              = 0;
     int                   random_ind       = 4; // determined by dice roll
     int                   row_count        = 0;
@@ -2441,6 +2539,7 @@ int main( int argc, char ** argv )
     srand( random_ind * time(0) );
 
     params[0] = EXTENSION_NAME;
+    params[1] = VERSION;
 
     if( conninfo == NULL )
     {
@@ -2454,7 +2553,7 @@ int main( int argc, char ** argv )
         parent,
         ( char * ) extension_check_query,
         params,
-        1
+        2
     );
 
     if( result == NULL )
@@ -2472,7 +2571,8 @@ int main( int argc, char ** argv )
     {
         _log(
             LOG_LEVEL_FATAL,
-            "Extension check failed. Is %s installed?",
+            "Extension check failed. Is version %s of %s installed?",
+            VERSION,
             EXTENSION_NAME
         );
     }
@@ -2586,7 +2686,13 @@ int main( int argc, char ** argv )
     while( 1 )
     {
         // Main loop for parent
-        if( enable_stats && difftime( time( NULL ), last_stat_update ) > STAT_UPDATE_INTERVAL )
+        if(
+                enable_stats
+             && difftime(
+                    time( NULL ),
+                    last_stat_update
+                ) > STAT_UPDATE_INTERVAL
+          )
         {
             _log( LOG_LEVEL_DEBUG, "Updating stats..." );
             _gather_and_update_stats( parent, stats );
@@ -2594,11 +2700,143 @@ int main( int argc, char ** argv )
         }
 
         sleep( 10 );
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+        _get_child_counts_from_db();
+
+        if(
+              ( override_event_jobs != 0 && override_event_jobs != event_jobs )
+           || ( override_work_jobs != 0 && override_work_jobs != work_jobs )
+          )
+        {
+            _resize_pid_table( &_queue_loop_wrapper );
+            override_event_jobs = 0;
+            override_work_jobs  = 0;
+        }
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
         _manage_children( &_queue_loop_wrapper );
     }
 
     return 0;
 }
+
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+static void _get_child_counts_from_db()
+{ //XXX
+    PGresult *      worker_count_result = NULL;
+    char *          worker_count        = NULL;
+    struct worker * me                  = NULL;
+    unsigned int    temp                = 0;
+
+    me = get_worker_by_pid();
+
+    if( me == NULL || me->type != WORKER_TYPE_PARENT )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Illegal entry into _get_child_counts_from_db"
+        );
+        return;
+    }
+
+    if( me->conn == NULL )
+    {
+        db_connect( me );
+    }
+
+    worker_count_result = _execute_query(
+        me,
+        ( char * ) get_work_processor_count,
+        NULL,
+        0
+    );
+
+    if( worker_count_result == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to check for override work queue processor counts"
+        );
+        return;
+    }
+
+    if( PQntuples( worker_count_result ) > 0 )
+    {
+        worker_count = get_column_value(
+            0,
+            worker_count_result,
+            "work_count"
+        );
+
+        if( worker_count != NULL )
+        {
+            temp = atoi( worker_count );
+
+            if( temp > 0 )
+                override_work_jobs = temp;
+            else
+                _log( LOG_LEVEL_DEBUG, "invalid count %d", temp );
+        }
+        else
+        {
+            _log( LOG_LEVEL_DEBUG, "NULL response for WC" );
+        }
+    }
+    else
+    {
+        _log( LOG_LEVEL_DEBUG, "Getting override work count got 0 rows" );
+    }
+
+    PQclear( worker_count_result );
+
+    worker_count_result = _execute_query(
+        me,
+        ( char * ) get_event_processor_count,
+        NULL,
+        0
+    );
+
+    if( worker_count_result == NULL )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to check for override event queue processor counts"
+        );
+        return;
+    }
+
+    if( PQntuples( worker_count_result ) > 0 )
+    {
+        worker_count = get_column_value(
+            0,
+            worker_count_result,
+            "event_count"
+        );
+
+        if( worker_count != NULL )
+        {
+            temp = atoi( worker_count );
+
+            if( temp > 0 )
+                override_event_jobs = temp;
+            else
+                _log( LOG_LEVEL_DEBUG, "invalid count %d", temp );
+        }
+        else
+        {
+            _log( LOG_LEVEL_DEBUG, "NULL response for WC" );
+        }
+    }
+    else
+    {
+        _log( LOG_LEVEL_DEBUG, "Getting override event count got 0 rows" );
+    }
+
+    PQclear( worker_count_result );
+    PQfinish( me->conn );
+    me->conn = NULL;
+    return;
+}
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
 
 static void _gather_and_update_stats( struct worker * me, struct em_stat ** stats )
 {
@@ -2698,6 +2936,7 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
 
         free( stats[0] );
         stats[0] = NULL;
+        PQclear( stat_update );
     }
 
     // Dont perform the update if there's nothing _to_ update
@@ -2747,6 +2986,7 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
 
         free( stats[1] );
         stats[1] = NULL;
+        PQclear( stat_update );
     }
 
     if( me->conn != NULL )
@@ -2913,7 +3153,10 @@ static void set_session_gucs( struct worker * me, char * session_gucs )
 
         value[json_value_token.end - json_value_token.start] = '\0';
 
-        if( strcmp( value, "null" ) == 0 || strcmp( value, "NULL" ) == 0 )
+        if(
+                strncmp( value, "null", MIN( strlen( value ), 4 ) ) == 0
+             || strncmp( value, "NULL", MIN( strlen( value ), 4 ) ) == 0
+          )
         {
             free( value );
             value = NULL;
@@ -3477,7 +3720,7 @@ static bool _get_advisory_lock( struct worker * me )
         return false;
     }
 
-    if( strcmp( adv_result, "t" ) == 0 || strcmp( adv_result, "T" ) == 0 )
+    if( strncmp( adv_result, "t", 1 ) == 0 || strncmp( adv_result, "T", 1 ) == 0 )
     {
         PQclear( result );
         return true;

@@ -18,7 +18,7 @@ BEGIN
         AND schema_name = 'eventmanagertest';
 
     IF FOUND THEN
-        RIASE NOTICE 'PASSED: new event table';
+        RAISE NOTICE 'PASSED: new event table';
         RETURN;
     END IF;
 

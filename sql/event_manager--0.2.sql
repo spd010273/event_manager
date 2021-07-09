@@ -1,12 +1,12 @@
 /*-----------------------------------------------------------------------------
  *
- * event_manager--0.1.sql
- *     Event Manager extension schema
+ * event_manager--0.2.sql
+ *     Event Manager extension schema for version 0.2
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2021, Nead Werx, Inc.
  *
  * IDENTIFICATION
- *        event_manager--0.1.sql
+ *        event_manager--0.2.sql
  *
  *-----------------------------------------------------------------------------
  */
@@ -20,7 +20,6 @@
  *     @extschema@.unlogged_queue: TRUE/FALSE - when true, creates queue tables as UNLOGGED, speeding up DML to these tables.
  *                                 The queues lose crash safety when this is TRUE, and will be truncated on crash recovery.
  *                                 Additionally, the queues will NOT be replicated when set to TRUE
- *     @extschema@. #TODO
  *
  *
  *  Note:
@@ -96,7 +95,11 @@ BEGIN
         RAISE DEBUG '@extschema@: set configuration parameter % to %', NEW.key, NEW.value;
     END IF;
 
-    NOTIFY configuration_change;
+    IF( NEW.key IN( '@extschema@.override_work_process_count', '@extschema@.override_event_process_count' ) ) THEN
+        -- These are periodically polled by the parent process
+        RETURN NEW;
+    END IF;
+    NOTIFY configuration_update;
     RETURN NEW;
 END
  $_$
@@ -344,7 +347,7 @@ COMMENT ON COLUMN @extschema@.tb_statistic.tx_fail IS 'The number of failed tran
 COMMENT ON COLUMN @extschema@.tb_statistic.tx_duration IS 'The cumulative duration, in seconds, of all transactions during the reporting window for this worker';
 COMMENT ON COLUMN @extschema@.tb_statistic.recorded IS 'The timestamp which these statistics were recorded';
 
-CREATE OR REPLACE FUNCTION @extschema@.fn_dummy_when_function
+CREATE FUNCTION @extschema@.fn_dummy_when_function
 (
     in_event_table_work_item    INTEGER,
     in_pk_value                 INTEGER,
@@ -358,7 +361,7 @@ RETURNS BOOLEAN AS
  $_$
     LANGUAGE SQL IMMUTABLE PARALLEL SAFE;
 
-CREATE OR REPLACE FUNCTION @extschema@.fn_test_work_item_query()
+CREATE FUNCTION @extschema@.fn_test_work_item_query()
 RETURNS TRIGGER AS
  $_$
 DECLARE
@@ -400,7 +403,7 @@ CREATE TRIGGER tr_work_item_query_test
     AFTER INSERT OR UPDATE ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_test_work_item_query();
 
-CREATE OR REPLACE FUNCTION @extschema@.fn_catalog_check()
+CREATE  FUNCTION @extschema@.fn_catalog_check()
 RETURNS TRIGGER AS
  $_$
 BEGIN
@@ -438,7 +441,41 @@ CREATE TRIGGER tr_event_table_catalog_check
     AFTER INSERT OR UPDATE ON @extschema@.tb_event_table
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_catalog_check();
 
-CREATE OR REPLACE FUNCTION @extschema@.fn_enqueue_event()
+CREATE FUNCTION @extschema@.fn_get_boolean_guc_value
+(
+    in_name VARCHAR
+)
+RETURNS BOOLEAN AS
+ $_$
+    WITH tt_base_tuple AS
+    (   -- Just need a tuple so the function doesn't return void
+        SELECT in_name AS guc_name
+    )
+        SELECT COALESCE(
+                   CASE WHEN lower( current_setting( tt.guc_name, TRUE )::VARCHAR ) LIKE 't%'
+                          OR current_setting( tt.guc_name, TRUE )::VARCHAR = '1'
+                        THEN TRUE
+                        WHEN lower( current_setting( tt.guc_name, TRUE )::VARCHAR ) LIKE 'f%'
+                          OR current_setting( tt.guc_name, TRUE )::VARCHAR = '0'
+                        THEN FALSE
+                        ELSE NULL::BOOLEAN
+                         END,
+                   CASE WHEN lower( s.value ) LIKE 't%'
+                          OR s.value = '1'
+                        THEN TRUE
+                        WHEN lower( s.value ) LIKE 'f%'
+                          OR s.value = '0'
+                        THEN FALSE
+                        ELSE NULL::BOOLEAN
+                         END
+               ) AS result
+          FROM tt_base_tuple tt
+     LEFT JOIN @extschema@.tb_setting s
+            ON s.key = tt.guc_name;
+ $_$
+    LANGUAGE SQL STABLE PARALLEL SAFE;
+
+CREATE FUNCTION @extschema@.fn_enqueue_event()
 RETURNS TRIGGER AS
  $_$
 DECLARE
@@ -499,7 +536,7 @@ BEGIN
                ) x;
     END IF;
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: event_enqueue - uid %', my_uid;
     END IF;
 
@@ -566,7 +603,7 @@ BEGIN
                             my_guc_values
                         );
 
-            IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+            IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
                 RAISE DEBUG '@extschema@: event enqueued';
             END IF;
         END IF;
@@ -576,7 +613,7 @@ END
  $_$
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE;
 
-CREATE OR REPLACE FUNCTION @extschema@.fn_no_ddl_check()
+CREATE FUNCTION @extschema@.fn_no_ddl_check()
 RETURNS TRIGGER AS
  $_$
 DECLARE
@@ -849,7 +886,7 @@ BEGIN
 
     DROP TABLE tt_desired_triggers;
     DROP TABLE tt_existing_triggers;
-    
+
     RETURN;
 END
  $_$
@@ -878,7 +915,7 @@ CREATE TRIGGER tr_new_enqueue_trigger
     AFTER INSERT OR UPDATE OF source_event_table, source_column_name OR DELETE ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_manage_trigger_wrapper();
 
-CREATE OR REPLACE FUNCTION @extschema@.fn_handle_new_event_queue_item()
+CREATE FUNCTION @extschema@.fn_handle_new_event_queue_item()
 RETURNS TRIGGER AS
   $_$
 DECLARE
@@ -891,15 +928,14 @@ DECLARE
     my_key          VARCHAR;
     my_value        VARCHAR;
 BEGIN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.disable_event_queue' ) IS TRUE ) THEN
+        RETURN NEW;
+    END IF;
+
     my_is_async := TRUE;
     SELECT COALESCE(
                etwi.execute_asynchronously,
-               CASE WHEN lower( value ) LIKE '%t%'
-                    THEN TRUE
-                    WHEN lower( value ) LIKE '%f%'
-                    THEN FALSE
-                    ELSE NULL
-                     END
+               @extschema@.fn_get_boolean_guc_value( '@extschema@.execute_asynchronously' )
            ) AS is_async,
            etwi.work_item_query,
            etwi.action,
@@ -909,14 +945,12 @@ BEGIN
            my_action,
            my_transaction_label
       FROM @extschema@.tb_event_table_work_item etwi
- LEFT JOIN @extschema@.tb_setting s
-        ON s.key = '@extschema@.execute_asynchronously'
      WHERE etwi.event_table_work_item = NEW.event_table_work_item;
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_event_queue_item;
 
-        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
             RAISE DEBUG '@extschema@: event processing - async notify sent';
         END IF;
         RETURN NEW;
@@ -928,7 +962,7 @@ BEGIN
             ) || '::INTEGER'
       INTO my_uid;
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: event processing - uid %', my_uid;
     END IF;
 
@@ -961,7 +995,7 @@ BEGIN
     -- Replace any remaining bindpoints with NULL
     my_query := regexp_replace( my_query, '\?(((OLD)|(NEW))\.)?\w+\?', 'NULL', 'g' );
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: Event processing - Final query %', my_query;
     END IF;
 
@@ -987,7 +1021,7 @@ BEGIN
                         NEW.session_values
                     );
 
-        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
             RAISE DEBUG '@extschema@: Created work queue row (%,%,%,%,%,%,%)',
                         my_parameters,
                         my_uid,
@@ -1008,7 +1042,7 @@ BEGIN
             AND eq.old::VARCHAR IS NOT DISTINCT FROM NEW.old::VARCHAR
             AND eq.new::VARCHAR IS NOT DISTINCT FROM NEW.new::VARCHAR;
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: Processed event queue item';
     END IF;
 
@@ -1034,21 +1068,20 @@ DECLARE
 BEGIN
     my_is_async := TRUE;
 
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.disable_work_queue' ) IS TRUE ) THEN
+        RETURN NEW;
+    END IF;
+
     SELECT COALESCE(
                NEW.execute_asynchronously,
-               CASE WHEN lower( value ) LIKE '%t%'
-                    THEN TRUE
-                    ELSE FALSE
-                     END
-           ) AS is_async
-      INTO my_is_async
-      FROM @extschema@.tb_setting
-     WHERE key = '@extschema@.execute_asynchronously';
+               @extschema@.fn_get_boolean_guc_value( '@extschema@.execute_asynchronously' )
+           )
+      INTO my_is_async;
 
     IF( my_is_async IS TRUE ) THEN
         NOTIFY new_work_queue_item;
 
-        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
             RAISE DEBUG '@extschema@: work processing - sent async notify';
         END IF;
         RETURN NULL;
@@ -1109,7 +1142,7 @@ BEGIN
 
     my_query := regexp_replace( my_query, '\?(((OLD)|(NEW))\.)?\w+\?', 'NULL', 'g' );
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: work processing - final query is %', my_query;
     END IF;
 
@@ -1127,7 +1160,7 @@ BEGIN
         EXECUTE 'SELECT fn_label_transaction( $1 )'
           USING NEW.transaction_label;
 
-        IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+        IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
             RAISE DEBUG '@extschema@: cyanaudit hook fired';
         END IF;
     END IF;
@@ -1140,7 +1173,7 @@ BEGIN
             AND transaction_label IS NOT DISTINCT FROM NEW.transaction_label
             AND execute_asynchronously IS NOT DISTINCT FROM NEW.execute_asynchronously;
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: Processed work queue item';
     END IF;
     RETURN NULL;
@@ -1173,7 +1206,7 @@ BEGIN
         RAISE EXCEPTION 'Function % is not in catalog', NEW.when_function;
     END IF;
 
-    IF( COALESCE( current_setting( '@extschema@.debug', TRUE )::BOOLEAN, FALSE ) IS TRUE ) THEN
+    IF( @extschema@.fn_get_boolean_guc_value( '@extschema@.debug' ) IS TRUE ) THEN
         RAISE DEBUG '@extschema@: when function validated';
     END IF;
 

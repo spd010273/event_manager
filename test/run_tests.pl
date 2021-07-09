@@ -32,18 +32,21 @@ use Cwd qw( abs_path );
 use File::Temp;
 use File::Glob;
 
+my $version = &_get_version_from_file();
+
 # make check parameters
 Readonly my $MC_PORT             => '5432';
 Readonly my $MC_USER             => 'postgres';
 Readonly my $MC_HOST             => 'localhost';
-
-Readonly my $VERSION             => '0.1';
+Readonly my $VERSION             => "$version";
 Readonly my $TESTDIR             => './test/sql/';
+Readonly my $SETUP_SQL           => './tools/setup.sql';
+Readonly my $EXT_SQL             => './sql/';
 Readonly my $TEST_DATABASE       => '__em_test__';
 Readonly my $MC_POSTGRES_CS      => "dbi:Pg:dbname=postgres;host=$MC_HOST;port=$MC_PORT";
 Readonly my $MC_TEST_CS          => "dbi:Pg:dbname=$TEST_DATABASE;host=$MC_HOST;port=$MC_PORT";
 Readonly my $VALGRIND_PREFIX     => <<VALGRIND;
-valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all
+valgrind --track-origins=yes --read-inline-info=yes --read-var-info=yes --leak-check=full --show-leak-kinds=all --read-var-info=yes --trace-children=yes -v
 VALGRIND
 Readonly my $USAGE_MESSAGE       => <<"USAGE";
 Usage:
@@ -72,7 +75,17 @@ INNER JOIN pg_class c
      WHERE l.locktype = 'advisory'
        AND a.datname = ?
 SQL
-
+Readonly my $CHECK_VERSION => <<SQL;
+    SELECT extversion
+      FROM pg_extension
+     WHERE extname = 'event_manager'
+SQL
+Readonly my $WARNING_MESSAGE => <<TEXT;
+WARNING: This script will have side effects on the specified database!
+This includes dropping the extension and recreating it, generating
+test tables and test data. Author(s) are not responsible for misuse of
+this test harness! To acknowledge, press [Y] or [N] and hit ENTER.
+TEXT
 $Getopt::Std::OUTPUT_HELP_VERSION   = $VERSION;
 $Getopt::Std::STANDARD_HELP_VERSION = 1;
 
@@ -80,12 +93,45 @@ my  $username;
 my  $dbname;
 my  $port;
 my  $hostname;
+my  $connection_string;
 my  @children;
 my  $debug                     = 0;
 my  $use_valgrind              = 0;
 my  $manager_running           = 0;
 my  $manager_should_be_running = 0;
+my  $version_updated           = 0;
 our $make_check                = 0;
+
+sub _get_version_from_file()
+{
+    my $fh;
+    my $cwd = abs_path();
+    if( $cwd =~ m/^.*\/event_manager$/ && -e 'CURRENT_VERSION' )
+    {
+        unless( open( $fh, '<', 'CURRENT_VERSION' ) )
+        {
+            croak 'Failed to open file CURRENT_VERSION in event_manager root directory';
+        }
+    }
+    elsif( $cwd =~ m/event_manager\/test$/ &&-e '../CURRENT_VERSION' )
+    {
+        unless( open( $fh, '<', '../CURRENT_VERSION' ) )
+        {
+            croak "Failed to open file '../CURRENT_VERSION' in event_manager root directory";
+        }
+    }
+    else
+    {
+        croak 'Unable to locate a valid version file';
+    }
+
+    my $line = <$fh>;
+    my $version = $line;
+    $version =~ s/\n//;
+
+    close( $fh );
+    return $version;
+}
 
 sub HELP_MESSAGE()
 {
@@ -115,6 +161,79 @@ sub usage(;$)
     carp "$USAGE_MESSAGE\n";
 
     exit 1;
+}
+
+sub check_and_upgrade_extension()
+{
+    return if( length( $connection_string ) == 0 );
+    return if( $version_updated );
+    my $major_version = $VERSION;
+    $major_version =~ s/\.\d+$//;
+    my $minor_version = $VERSION;
+    $minor_version =~ s/^\d+\.//;
+
+    my $check_versions = [];
+    for( my $ma = 0; $ma <= $major_version; $ma++ )
+    {
+        for( my $mi = 1; $mi <= $minor_version; $mi++ )
+        {
+            push( @$check_versions, "${ma}.${mi}" );
+        }
+    }
+
+    my $dir;
+
+    unless( opendir( $dir, $EXT_SQL ) )
+    {
+        croak( "Failed to open extension SQL directory '$EXT_SQL': $OS_ERROR\n" );
+    }
+
+    my $upgradable_versions = [];
+
+    while( my $entry = readdir( $dir ) )
+    {
+        next if( $entry =~ m/^\./ );
+
+        foreach my $version( @$check_versions )
+        {
+            if( $entry =~ m/event_manager--\d+\.\d+--${version}.sql$/ )
+            {
+                push( @$upgradable_versions, $version );
+            }
+        }
+    }
+
+    closedir( $dir );
+
+    my $conn = DBI->connect( $connection_string, 'postgres', undef );
+
+    unless( $conn )
+    {
+        croak( 'Failed to connect to database' );
+    }
+
+    my $sth = $conn->prepare( $CHECK_VERSION );
+    unless( $sth->execute() )
+    {
+        croak( 'Failed to check extension version' );
+    }
+
+    my $row = $sth->fetchrow_hashref();
+    my $installed_version = $row->{extversion};
+
+    $sth->finish();
+
+    foreach my $version( @$upgradable_versions )
+    {
+        return if( $version eq $installed_version );
+        unless( $conn->do( "ALTER EXTENSION event_manager UPDATE TO '$version'" ) )
+        {
+            croak( "Failed while upgrading extension to $version\n" );
+        }
+    }
+
+    $version_updated = 1;
+    return;
 }
 
 sub run_test($) :Export(:DEFAULT)
@@ -149,7 +268,12 @@ sub run_test($) :Export(:DEFAULT)
 
             if( $requirement =~ /event_manager/ )
             {
-                unless( check_event_manager_running( 1 ) )
+                if( $manager_should_be_running and not check_event_manager_running() )
+                {
+                    return { result => 0, error_text => 'Event and/or Work processors was running but died' };
+                }
+
+                if( not $manager_should_be_running  and not check_event_manager_running( 1 ) )
                 {
                     return { result => 0, error_text => 'Event and/or Work processors not running' };
                 }
@@ -227,29 +351,73 @@ sub run_test($) :Export(:DEFAULT)
 sub get_tests() :Export(:DEFAULT)
 {
     my $dir;
+    my $result = {}; #  {version => [ file_name => path ] }
 
     unless( opendir( $dir, $TESTDIR ) )
     {
         croak( "Failed to find tests in '$TESTDIR': $OS_ERROR" );
     }
 
-    my @test_files;
+    print "Gathering tests for version $VERSION\n";
 
-    while( my $entry = readdir $dir )
+    my $versions = [];
+    my $run_versions = [];
+
+    while( my $version_entry = readdir $dir )
     {
-        if( $entry =~ /^\./ or not $entry =~ /\.sql$/ )
-        {
-            next;
-        }
-
-        push( @test_files, $entry );
+        next if( $version_entry =~ /^\./ or not $version_entry =~ /^v/ );
+        push( @$versions, $version_entry );
     }
 
     closedir( $dir );
 
-    @test_files = sort @test_files;
+    if( scalar( @$versions ) == 0 )
+    {
+        croak( "Could not find expected versioned directories for tests\n" );
+    }
 
-    return \@test_files;
+    foreach my $version( sort @$versions )
+    {
+        my $numeric_version = $version;
+        $numeric_version =~ s/^v//;
+
+        if( $numeric_version <= $VERSION )
+        {
+            push( @$run_versions, $version );
+        }
+    }
+
+    foreach my $run_version( @$run_versions )
+    {
+        my @test_files;
+
+        unless( opendir( $dir, "${TESTDIR}/${run_version}" ) )
+        {
+            corak( "Failed to find tests in '$TESTDIR': $OS_ERROR" );
+        }
+
+        while( my $entry = readdir $dir )
+        {
+            if( $entry =~ /^\./ or not $entry =~ /\.sql$/ )
+            {
+                next;
+            }
+
+            push( @test_files, $entry );
+        }
+
+        closedir( $dir );
+
+        @test_files = sort( @test_files );
+
+        foreach my $test_file( @test_files )
+        {
+            my $hash = { $test_file => "${TESTDIR}/${run_version}/${test_file}" };
+            push( @{$result->{$run_version}}, $hash );
+        }
+    }
+
+    return $result;
 }
 
 sub check_event_manager_running(;$)
@@ -267,7 +435,21 @@ sub check_event_manager_running(;$)
 
     if( $manager_should_be_running )
     {
-        my $dbh = DBI->connect( $MC_TEST_CS, 'postgres', undef );
+        if( $use_valgrind )
+        {
+            # Process may have been SIGHUP'd so we'll give it a sec to reconnect
+            sleep( 10 );
+        }
+
+        my $dbh;
+        if( $make_check )
+        {
+            $dbh = DBI->connect( $MC_TEST_CS, 'postgres', undef );
+        }
+        else
+        {
+            $dbh = DBI->connect( $connection_string, $username, undef );
+        }
 
         unless( $dbh )
         {
@@ -301,7 +483,6 @@ sub check_event_manager_running(;$)
         }
 
         $event_processor_running = $sth->rows();
-
         $sth->bind_param( 1, 'tb_work_queue' );
 
         if( $make_check )
@@ -327,10 +508,14 @@ sub check_event_manager_running(;$)
         {
             return 1;
         }
+
+        return 0;
     }
 
-    if( $start_process )
+    if( $start_process and not $manager_should_be_running )
     {
+        check_and_upgrade_extension();
+
         $manager_should_be_running = 1;
         # Do the thing
         my $startflags = [];
@@ -353,9 +538,13 @@ sub check_event_manager_running(;$)
             $command = "./event_manager -U $username -d $dbname -h $hostname -p $port $flag \&> /tmp/event_manager_${log}.log";
         }
 
+        my $startup_wait = 5; # seconds
+
         if( $use_valgrind )
         {
-            $command = "${VALGRIND_PREFIX}${command}";
+            $command = "${VALGRIND_PREFIX} ${command}";
+            $command =~ s/\n//;
+            $startup_wait += 15; # valgrind takes a bit of time
         }
 
         my $pid = fork();
@@ -376,7 +565,7 @@ sub check_event_manager_running(;$)
             push( @children, $pid );
         }
 
-        sleep( 5 );
+        sleep( $startup_wait );
 
         if( &check_event_manager_running() )
         {
@@ -396,8 +585,31 @@ sub start_process($)
         { type => SCALAR },
     );
 
-    system( $command );
+    exec( $command );
     exit 0;
+}
+
+sub _wait_for_user_input()
+{
+    return 1 if( $make_check );
+    my $count = 0;
+    WAIT:
+    my $result = <STDIN>;
+    if( $result =~ m/^y$/i )
+    {
+        return 1;
+    }
+    elsif( $result =~ m/^n$/i )
+    {
+        return 0;
+    }
+
+    $count++;
+    print 'Please ' if( $count < 3 );
+    print 'Pretty please ' if( $count >= 3 and $count < 6 );
+    print 'Pretty please with a cherry on top, ' if( $count >= 6 );
+    print "respond [y] or [n] and hit ENTER\n";
+    goto WAIT;
 }
 
 ## MAIN PROGRAM
@@ -422,9 +634,17 @@ if( $opt_l )
     # Only list tests
     my $tests = get_tests();
     print "Tests that will be run:\n";
-    foreach my $test( @$tests )
+    foreach my $version( sort keys %$tests )
     {
-        print "$test\n";
+        print "Tests for $version:\n";
+
+        foreach my $test_entry( @{$tests->{$version}} )
+        {
+            foreach my $test( keys %$test_entry )
+            { # This will only have 1 entry, I'm just being lazy
+                print "  $test\n";
+            }
+        }
     }
     exit 0;
 }
@@ -457,6 +677,7 @@ if( $make_check )
         croak "Failed to create test database \"$TEST_DATABASE\"";
     }
 
+    $connection_string = $MC_TEST_CS;
     $dbh->disconnect();
 }
 else
@@ -500,6 +721,14 @@ else
     {
         usage( 'Invalid hostname' );
     }
+
+    $connection_string = "dbi:Pg:dbname=$dbname;host=$hostname;port=$port";
+    print "Using connection string '$connection_string'\n";
+    print $WARNING_MESSAGE;
+    unless( _wait_for_user_input() )
+    {
+        exit 1;
+    }
 }
 
 my $tests = get_tests();
@@ -508,20 +737,42 @@ if( check_event_manager_running() and not $manager_should_be_running )
     croak 'Please stop the event_manager process(es) for testing';
 }
 
-foreach my $test( @$tests )
+foreach my $version( sort keys %$tests )
 {
-    print "RUNNING: $test... ";
-    my $result = run_test( "$TESTDIR/$test" );
+    print "RUNNING $version TESTS:\n";
 
-    if( not defined( $result->{result} ) or $result->{result} == 0 )
+    my $version_failure = 0;
+    foreach my $test( @{$tests->{$version}} )
     {
-        print "FAILED\n";
-        print "    $result->{error_text}\n" if( $debug and defined( $result->{error_text} ) );
+        foreach my $test_name( keys %$test )
+        {
+            print "  RUNNING $test_name... ";
+            my $test_file = $test->{$test_name};
+            my $result = run_test( $test_file );
+
+            if( not defined( $result->{result} ) or $result->{result} == 0 )
+            {
+                print "FAILED\n";
+                print "    $result->{error_text}\n" if( $debug and defined( $result->{error_text} ) );
+                $version_failure++;
+            }
+            elsif( defined( $result->{result} ) and $result->{result} == 1 )
+            {
+                print "PASSED\n";
+            }
+        }
+
+        last if( $version_failure );
+    }
+
+    if( $version_failure )
+    {
+        print "Version $version has failed test(s).\n";
         last;
     }
-    elsif( defined( $result->{result} ) and $result->{result} == 1 )
+    else
     {
-        print "PASSED\n";
+        print "Version $version passed tests\n";
     }
 }
 
@@ -551,21 +802,29 @@ if( $make_check )
 
 if( scalar( @children ) > 0 )
 {
-    kill 'TERM', @children;
-#    sleep( 1 );
-#    kill 'KILL', @children;
+    kill 'INT', @children;
 }
 
-my $result = `ps aux | grep "Event Manager " | awk '{ print \$2 }'`;
+## Do it twice, handles valgrind, naming variants.
+my $result = `ps aux | grep "event_manager" | grep -v grep | awk '{ print \$2 }'`;
 
 foreach my $pid( split( "\n", $result ) )
 {
     chomp( $pid );
     next unless( $pid =~ /^\d+$/ );
-    kill 'TERM', $pid;
-    sleep( 1 );
-    kill 'KILL', $pid;
+    kill 'INT', $pid;
 }
+
+$result = `ps aux | grep "Event Manager" | grep -v grep | awk '{ print \$2 }'`;
+
+foreach my $pid( split( "\n", $result ) )
+{
+    chomp( $pid );
+    next unless( $pid =~ /^\d+$/ );
+    kill 'INT', $pid;
+}
+
+sleep( 1 );
 
 if( check_event_manager_running() )
 {

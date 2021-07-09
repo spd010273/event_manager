@@ -1,14 +1,19 @@
 DO
  $_$
 DECLARE
-    my_schema                 VARCHAR := 'event_manager';
-    my_execute_asynchronously VARCHAR := 'true';
-    my_set_uid_function       VARCHAR := 'fn_setup_entity_session( ?uid?, ?uid? )';
-    my_get_uid_function       VARCHAR := 'fn_get_session_entity()';
-    my_default_when_function  VARCHAR := 'event_manager.fn_dummy_when_function';
-    my_session_gucs           VARCHAR := 'xerp.effective_entity,xerp.entity,event_manager.base_url';
-    my_base_url               VARCHAR := 'https://change_me/';
-    my_query                  VARCHAR;
+    my_schema                       VARCHAR := 'event_manager';
+    my_execute_asynchronously       VARCHAR := 'true';
+    my_set_uid_function             VARCHAR := 'fn_setup_entity_session( ?uid?, ?uid? )';
+    my_get_uid_function             VARCHAR := 'fn_get_session_entity()';
+    my_default_when_function        VARCHAR := 'event_manager.fn_dummy_when_function';
+    my_session_gucs                 VARCHAR := 'xerp.effective_entity,xerp.entity,event_manager.base_url';
+    my_base_url                     VARCHAR := 'https://change_me/';
+    my_disable_event_queue          VARCHAR := 'false';
+    my_disable_work_queue           VARCHAR := 'false';
+    my_event_manager_version        VARCHAR := '0.1';
+    my_override_event_process_count VARCHAR := '';
+    my_override_work_process_count  VARCHAR := '';
+    my_query                        VARCHAR;
 BEGIN
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.execute_asynchronously = ''' || my_execute_asynchronously || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.default_when_function = ''' || my_default_when_function || '''';
@@ -16,7 +21,11 @@ BEGIN
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.get_uid_function = ''' || my_get_uid_function || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.session_gucs = ''' || my_session_gucs || '''';
     EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.base_url = ''' || my_base_url || '''';
-
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.disable_event_queue = ''' || my_disable_event_queue || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.disable_work_queue = ''' || my_disable_work_queue || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.version = ''' || my_event_manager_version || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.override_event_process_count = ''' || my_override_event_process_count || '''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET ' || my_schema || '.override_work_process_count = ''' || my_override_work_process_count || '''';
     my_query := '
 WITH tt_data AS
 (
@@ -27,7 +36,12 @@ WITH tt_data AS
                    ''' || my_schema || '.set_uid_function'',
                    ''' || my_schema || '.get_uid_function'',
                    ''' || my_schema || '.session_gucs'',
-                   ''' || my_schema || '.base_url''
+                   ''' || my_schema || '.base_url'',
+                   ''' || my_schema || '.disable_event_queue'',
+                   ''' || my_schema || '.disable_work_queue'',
+                   ''' || my_schema || '.version'',
+                   ''' || my_schema || '.override_event_process_count'',
+                   ''' || my_schema || '.override_work_process_count''
                ]::VARCHAR[]
            ) AS key,
            unnest(
@@ -37,7 +51,12 @@ WITH tt_data AS
                    ''' || my_set_uid_function || ''',
                    ''' || my_get_uid_function || ''',
                    ''' || my_session_gucs || ''',
-                   ''' || my_base_url || '''
+                   ''' || my_base_url || ''',
+                   ''' || my_disable_event_queue || ''',
+                   ''' || my_disable_work_queue || ''',
+                   ''' || my_event_manager_version || ''',
+                   ''' || my_override_event_process_count || ''',
+                   ''' || my_override_work_process_count || '''
                ]::VARCHAR[]
            ) AS value
 )
@@ -65,7 +84,10 @@ WITH tt_data AS
                    ''' || my_schema || '.set_uid_function'',
                    ''' || my_schema || '.get_uid_function'',
                    ''' || my_schema || '.session_gucs'',
-                   ''' || my_schema || '.base_url''
+                   ''' || my_schema || '.base_url'',
+                   ''' || my_schema || '.disable_event_queue'',
+                   ''' || my_schema || '.disable_work_queue'',
+                   ''' || my_schema || '.version''
                ]::VARCHAR[]
            ) AS key,
            unnest(
@@ -75,7 +97,10 @@ WITH tt_data AS
                    ''' || my_set_uid_function || ''',
                    ''' || my_get_uid_function || ''',
                    ''' || my_session_gucs || ''',
-                   ''' || my_base_url || '''
+                   ''' || my_base_url || ''',
+                   ''' || my_disable_event_queue || ''',
+                   ''' || my_disable_work_queue || ''',
+                   ''' || my_event_manager_version || '''
                ]::VARCHAR[]
            ) AS value
 )

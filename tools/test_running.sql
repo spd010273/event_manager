@@ -6,6 +6,8 @@
                 THEN 'work processor'
                 WHEN l.classid = 'event_manager.tb_event_queue'::REGCLASS::OID::BIGINT
                 THEN 'event processor'
+                WHEN l.classid = 'event_manager.tb_setting'::REGCLASS::OID::BIGINT
+                THEN 'config manager'
                 ELSE NULL
                  END AS worker_type,
            CASE WHEN a.client_addr IS NULL
@@ -26,6 +28,7 @@ INNER JOIN pg_stat_activity a
      WHERE l.locktype = 'advisory'
        AND l.classid IN(
                'event_manager.tb_work_queue'::REGCLASS::OID::BIGINT,
-               'event_manager.tb_event_queue'::REGCLASS::OID::BIGINT
+               'event_manager.tb_event_queue'::REGCLASS::OID::BIGINT,
+               'event_manager.tb_setting'::REGCLASS::OID::BIGINT
            );
 

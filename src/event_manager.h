@@ -55,7 +55,7 @@
 
 // Timeout for both curl connections and request duration
 #define TIMEOUT_RETRY_LIMIT 1L
-#define CURL_TIMEOUT 600L // 5 minutes for request to complete
+#define CURL_TIMEOUT 600L // 10 minutes for request to complete
 #define CURL_CONNECT_TIMEOUT 5L // 5 Secs for connection
 #define RETRY_BACKOFF 5L
 
@@ -114,6 +114,9 @@ static void clear_session_gucs( struct worker *, char * );
 static void _set_application_name( struct worker * );
 static bool _get_advisory_lock( struct worker * );
 static bool db_connect( struct worker * );
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+static void _get_child_counts_from_db( void );
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
 // Integration functions
 static void _cyanaudit_integration( struct worker *, char * );
 

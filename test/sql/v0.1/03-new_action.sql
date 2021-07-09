@@ -12,7 +12,7 @@ INSERT INTO event_manager.tb_action
             ),
             (
                 NULL,
-                'https://ises.chris.neadwerx.com/api/current/locations',
+                'https://xerp.chris.neadwerx.com/api/current/locations',
                 '{"number":"121","testparam2":"val2"}'::JSONB
             );
 

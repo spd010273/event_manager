@@ -1,7 +1,7 @@
 UPDATE event_manager.tb_setting
    SET value = 'true'
  WHERE key = 'event_manager.execute_asynchronously';
-
+/* test async/sync isolation */
 DO
  $_$
 DECLARE

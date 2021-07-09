@@ -47,3 +47,17 @@ CREATE EXTENSION event_manager;
 ```
 
 This will generate the necessary tables, functions, and triggers for the Event Manager extension to function.
+
+# Specifying a build version
+
+The file in this repository root, CURRENT_VERSION, allows you to specify the version you with to compile, install, and test. This file is expected to have a single line in the form of <major_version>.<minor_version>. By default, the event_manager.control file is set to install 0.1.
+
+
+# Upgrade
+
+## v0.2
+If you would like to update the version which event_manager runs as, you will need to modify CURRENT_VERSION in the root directory. This file should contain only the version number with no linebreaks or empty lines
+
+```sql
+ALTER EXTENSION event_manager UPDATE TO '0.2';
+```

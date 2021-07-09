@@ -5,7 +5,7 @@ DROP SEQUENCE IF EXISTS eventmanagertest.sq_a;
 DROP SEQUENCE IF EXISTS eventmanagertest.sq_b;
 DROP SCHEMA IF EXISTS eventmanagertest;
 
-CREATE EXTENSION IF NOT EXISTS event_manager;
+CREATE EXTENSION IF NOT EXISTS event_manager WITH VERSION '0.1';
 
 DO
  $_$
@@ -38,6 +38,15 @@ INNER JOIN pg_extension e
 
     RAISE NOTICE 'PASSED: Extension build';
     RETURN;
+END
+ $_$
+    LANGUAGE plpgsql;
+
+DO
+ $_$
+BEGIN
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET event_manager.disable_work_queue = ''f''';
+    EXECUTE 'ALTER DATABASE "' || current_database() || '" SET event_manager.disable_event_queue = ''f''';
 END
  $_$
     LANGUAGE plpgsql;

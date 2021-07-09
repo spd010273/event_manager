@@ -25,7 +25,8 @@ static const char * extension_check_query = "\
       FROM pg_catalog.pg_extension e \
 INNER JOIN pg_catalog.pg_namespace n \
         ON n.oid = e.extnamespace \
-     WHERE e.extname = $1";
+     WHERE e.extname = $1 \
+       AND e.extversion = $2";
 
 static const char * get_event_queue_item = "\
 WITH ct_lock AS \
@@ -204,6 +205,34 @@ static const char * insert_stat_rollup = "\
                     $3::DOUBLE PRECISION, \
                     $4::VARCHAR \
                 )";
+
 static const char * pid_lock = "\
-    SELECT pg_try_advisory_lock( $1::REGCLASS::OID::INTEGER, $2::INTEGER ) AS result";
+    SELECT pg_try_advisory_lock( \
+               $1::REGCLASS::OID::INTEGER, \
+               $2::INTEGER \
+           ) AS result";
+
+// Gated later with version flag for v0.2, attribute is just for suppression
+// of unused variable with -Weverything or -Wunused-variable
+static const char * check_event_queue_guc __attribute__((unused)) = "\
+    SELECT " EXTENSION_NAME ".fn_get_boolean_guc_value( \
+               '" EXTENSION_NAME ".disable_event_queue' \
+           ) IS TRUE AS value";
+
+static const char * check_work_queue_guc __attribute__((unused)) = "\
+    SELECT " EXTENSION_NAME ".fn_get_boolean_guc_value( \
+               '" EXTENSION_NAME ".disable_work_queue' \
+           ) IS TRUE AS value";
+
+static const char * get_work_processor_count __attribute__((unused)) = "\
+    SELECT NULLIF( current_setting( \
+               '" EXTENSION_NAME ".override_work_process_count', \
+               TRUE \
+           ), '' )::INTEGER AS work_count";
+
+static const char * get_event_processor_count __attribute__((unused)) = "\
+    SELECT NULLIF( current_setting( \
+               '" EXTENSION_NAME ".override_event_process_count', \
+               TRUE \
+           ), '' )::INTEGER AS event_count";
 #endif // STRINGS_H

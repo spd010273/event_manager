@@ -87,9 +87,14 @@ struct query * _new_query( char * query_string )
         return NULL;
     }
 
-    strcpy( (char * )( query_object->query_string ), query_string );
+    strncpy(
+        (char * )( query_object->query_string ),
+        query_string,
+        query_object->length
+    );
+
     query_object->_bind_count = 0;
-    query_object->_bind_list = NULL;
+    query_object->_bind_list  = NULL;
 
     return query_object;
 }
@@ -213,15 +218,23 @@ void _finalize_query( struct query * query_object )
             matches[0].rm_so
         );
 
-        strcat(
+        strncat(
             temp_query,
-            bind_replace
+            bind_replace,
+            strlen( bind_replace )
         );
 
-        strcat(
+        strncat(
             temp_query,
-            ( char * ) ( query_object->query_string + matches[0].rm_eo )
+            ( char * ) ( query_object->query_string + matches[0].rm_eo ),
+            strlen( query_object->query_string + matches[0].rm_eo )
         );
+
+        temp_query[
+            matches[0].rm_so
+          + strlen( bind_replace )
+          + strlen( query_object->query_string + matches[0].rm_eo )
+        ] = '\0';
 
         query_object->query_string = ( char * ) realloc(
             ( void * ) query_object->query_string,
@@ -241,7 +254,12 @@ void _finalize_query( struct query * query_object )
             return;
         }
 
-        strcpy( query_object->query_string, temp_query );
+        strncpy(
+            query_object->query_string,
+            temp_query,
+            strlen( temp_query )
+        );
+        query_object->query_string[strlen(temp_query)] = '\0';
         free( temp_query );
     }
 
@@ -327,10 +345,10 @@ void _add_parameter_to_query(
         return;
     }
 
-    strcpy( bindpoint_search, "[?]" );
-    strcat( bindpoint_search, key );
-    strcat( bindpoint_search, "[?]" );
-
+    strncpy( bindpoint_search, "[?]", 3 );
+    strncat( bindpoint_search, key, strlen( key ) );
+    strncat( bindpoint_search, "[?]", 3 );
+    bindpoint_search[ strlen(key) + 6 ] = '\0';
     reg_result = regcomp( &regex, bindpoint_search, REG_EXTENDED );
 
     if( reg_result != 0 )
@@ -435,14 +453,16 @@ void _add_parameter_to_query(
             matches[0].rm_so
         );
 
-        strcat(
+        strncat(
             temp_query,
-            bindpoint_replace
+            bindpoint_replace,
+            strlen( bindpoint_replace )
         );
 
-        strcat(
+        strncat(
             temp_query,
-            ( char * ) ( query_object->query_string + matches[0].rm_eo )
+            ( char * ) ( query_object->query_string + matches[0].rm_eo ),
+            strlen( query_object->query_string + matches[0].rm_eo )
         );
 
         free( query_object->query_string );
@@ -469,7 +489,12 @@ void _add_parameter_to_query(
         }
 
         _log( LOG_LEVEL_DEBUG, "Temp query is '%s'", temp_query );
-        strcpy( query_object->query_string, temp_query );
+        strncpy(
+            query_object->query_string,
+            temp_query,
+            strlen( temp_query )
+        );
+
         query_object->length = strlen( temp_query );
         free( temp_query );
     }
@@ -518,7 +543,11 @@ void _add_parameter_to_query(
                 sizeof( char )
             );
 
-            strcpy( query_object->_bind_list[query_object->_bind_count], value );
+            strncpy(
+                query_object->_bind_list[query_object->_bind_count],
+                value,
+                strlen( value )
+            );
         }
 
         query_object->_bind_count = query_object->_bind_count + 1;
@@ -836,7 +865,7 @@ char * _add_json_parameters_to_param_list(
                 return NULL;
             }
 
-            strcpy( key_value_pair->value, "NULL" );
+            strncpy( key_value_pair->value, "NULL", 4 );
         }
 
         *malloc_size = *malloc_size
@@ -865,14 +894,15 @@ char * _add_json_parameters_to_param_list(
 
         if( first_param_pass == false )
         {
-            strcat( param_list, "&" );
+            strncat( param_list, "&", 1 );
         }
 
         first_param_pass = false;
 
-        strcat(
+        strncat(
             param_list,
-            ( char * ) ( key_value_pair->key )
+            ( char * ) ( key_value_pair->key ),
+            strlen( key_value_pair->key )
         );
 
         param_list[*malloc_size - 1] = '\0';
@@ -917,11 +947,12 @@ char * _add_json_parameters_to_param_list(
             return NULL;
         }
 
-        strcat( param_list, "=" );
+        strncat( param_list, "=", 1 );
 
-        strcat(
+        strncat(
             param_list,
-            encoded_value
+            encoded_value,
+            strlen( encoded_value )
         );
 
         curl_free( encoded_value );
@@ -1093,9 +1124,13 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
             return;
         }
 
-        strcpy( bindpoint_search, "[?]" );
-        strcat( bindpoint_search, key_value_pair->key );
-        strcat( bindpoint_search, "[?]" );
+        strncpy( bindpoint_search, "[?]", 3 );
+        strncat(
+            bindpoint_search,
+            key_value_pair->key,
+            strlen( key_value_pair->key )
+        );
+        strncat( bindpoint_search, "[?]", 3 );
 
         bindpoint_search[strlen( key_value_pair->key ) + 6] = '\0';
 
@@ -1178,15 +1213,24 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
                 matches[0].rm_so
             );
 
-            strcat(
+            strncat(
                 temp_string,
-                temp_value
+                temp_value,
+                strlen( temp_value )
             );
 
-            strcat(
+            strncat(
                 temp_string,
-                ( char * ) ( (*uri) + matches[0].rm_eo )
+                ( char * ) ( (*uri) + matches[0].rm_eo ),
+                strlen( (*uri) + matches[0].rm_eo )
             );
+
+            temp_string[
+                matches[0].rm_so
+              + strlen( temp_value )
+              + strlen( (*uri) + matches[0].rm_eo )
+//              - 1
+            ] = '\0';
 
             free( (*uri) );
 
@@ -1210,7 +1254,11 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
                 return;
             }
 
-            strcpy( (*uri), temp_string );
+            strncpy(
+                (*uri),
+                temp_string,
+                strlen( temp_string )
+            );
             (*uri)[strlen( temp_string )] = '\0';
             free( temp_string );
         }
@@ -1503,6 +1551,7 @@ static struct json_kv * new_kv_pair(
     char *           value           = NULL;
     struct json_kv * result          = NULL;
     bool             found_st_end    = false;
+    unsigned short   val_len         = 0;
 
     if(
             json_string == NULL
@@ -1537,7 +1586,7 @@ static struct json_kv * new_kv_pair(
 
     if( key_prefix != NULL )
     {
-        strcpy( key, key_prefix );
+        strncpy( key, key_prefix, key_size_offset );
     }
 
     strncat(
@@ -1612,7 +1661,11 @@ static struct json_kv * new_kv_pair(
         }
     }
 
-    if( strcmp( value, "null" ) == 0 || strcmp( value, "NULL" ) == 0 )
+    val_len = strlen( value );
+    if(
+           strncmp( value, "null", MIN( val_len, 4 ) ) == 0
+        || strncmp( value, "NULL", MIN( val_len, 4 ) ) == 0
+      )
     {
         free( value );
         value = NULL;

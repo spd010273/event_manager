@@ -3,5 +3,7 @@ event_manager
 *.so
 *.swp
 *.swo
+*.swn
 *.bc
 src/lib/jsmn/*
+src/lib/version.h

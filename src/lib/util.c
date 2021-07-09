@@ -60,13 +60,14 @@ Usage: event_manager\n \
  */
 void _parse_args( int argc, char ** argv )
 {
-    int    c               = 0;
-    char * username        = NULL;
-    char * dbname          = NULL;
-    char * port            = NULL;
-    char * hostname        = NULL;
-    char * event_job_count = NULL;
-    char * work_job_count  = NULL;
+    int          c               = 0;
+    unsigned int len             = 0;
+    char *       username        = NULL;
+    char *       dbname          = NULL;
+    char *       port            = NULL;
+    char *       hostname        = NULL;
+    char *       event_job_count = NULL;
+    char *       work_job_count  = NULL;
 
     opterr = 0;
 
@@ -89,7 +90,7 @@ void _parse_args( int argc, char ** argv )
             case '?':
                 _usage( NULL );
             case 'v':
-                printf( "Event Manager, version %f\n", ( (float) VERSION ) / 10.0 );
+                printf( "Event Manager, version %s\n", VERSION );
                 exit( 0 );
             case 'E':
                 event_job_count = optarg;
@@ -178,6 +179,10 @@ void _parse_args( int argc, char ** argv )
         }
     }
 
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+    override_event_jobs = 0;
+    override_work_jobs  = 0;
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
     if( port == NULL )
         port = "5432";
 
@@ -190,16 +195,15 @@ void _parse_args( int argc, char ** argv )
     if( dbname == NULL )
         dbname = username;
 
-    conninfo = ( char * ) calloc(
-        (
+    len = (
             strlen( username ) +
             strlen( port ) +
             strlen( dbname ) +
             strlen( hostname ) +
             26
-        ),
-        sizeof( char )
-    );
+          );
+
+    conninfo = ( char * ) calloc( len, sizeof( char ) );
 
     if( conninfo == NULL )
     {
@@ -209,14 +213,15 @@ void _parse_args( int argc, char ** argv )
         );
     }
 
-    strcpy( conninfo, "user=" );
-    strcat( conninfo, username );
-    strcat( conninfo, " host=" );
-    strcat( conninfo, hostname );
-    strcat( conninfo, " port=" );
-    strcat( conninfo, port );
-    strcat( conninfo, " dbname=" );
-    strcat( conninfo, dbname );
+    strncpy( conninfo, "user=", 5 );
+    strncat( conninfo, username, strlen( username ) );
+    strncat( conninfo, " host=", 6 );
+    strncat( conninfo, hostname, strlen( hostname ) );
+    strncat( conninfo, " port=", 6 );
+    strncat( conninfo, port, strlen( port ) );
+    strncat( conninfo, " dbname=", 8 );
+    strncat( conninfo, dbname, strlen( dbname ) );
+    conninfo[len - 1] = '\0';
 
 #ifdef DEBUG
     _log(
@@ -279,6 +284,7 @@ void _log( char * log_level, char * message, ... )
     FILE *         output_handle = NULL;
     struct timeval tv            = {0};
     char           buff_time[28] = {0}; // Time gon' give it to ya
+    unsigned short ll_len        = 0;
 
     if( message == NULL )
     {
@@ -292,6 +298,8 @@ void _log( char * log_level, char * message, ... )
         "%Y-%m-%d %H:%M:%S",
         gmtime( &tv.tv_sec )
     );
+
+    ll_len = strlen( log_level );
 
     // Setup logfile iff we're daemonizing and the parent's worker slot has
     // been inited
@@ -314,9 +322,30 @@ void _log( char * log_level, char * message, ... )
     if(
            output_handle == NULL
         && (
-                strcmp( log_level, LOG_LEVEL_WARNING ) == 0
-             || strcmp( log_level, LOG_LEVEL_ERROR )   == 0
-             || strcmp( log_level, LOG_LEVEL_FATAL )   == 0
+                strncmp(
+                    log_level,
+                    LOG_LEVEL_WARNING,
+                    MIN(
+                        ll_len,
+                        strlen( LOG_LEVEL_WARNING )
+                    )
+                ) == 0
+             || strncmp(
+                    log_level,
+                    LOG_LEVEL_ERROR,
+                    MIN(
+                        ll_len,
+                        strlen( LOG_LEVEL_ERROR )
+                    )
+                ) == 0
+             || strncmp(
+                    log_level,
+                    LOG_LEVEL_FATAL,
+                    MIN(
+                        ll_len,
+                        strlen( LOG_LEVEL_FATAL )
+                    )
+                ) == 0
            )
       )
     {
@@ -330,7 +359,16 @@ void _log( char * log_level, char * message, ... )
     va_start( args, message );
 
 #ifndef DEBUG
-    if( strcmp( log_level, LOG_LEVEL_DEBUG ) != 0 )
+    if(
+        strncmp(
+            log_level,
+            LOG_LEVEL_DEBUG,
+            MIN(
+                ll_len,
+                strlen( LOG_LEVEL_DEBUG )
+            )
+        ) != 0
+      )
     {
 #endif // DEBUG
         fprintf(
@@ -369,7 +407,16 @@ void _log( char * log_level, char * message, ... )
     va_end( args );
     fflush( output_handle );
 
-    if( strcmp( log_level, LOG_LEVEL_FATAL ) == 0 )
+    if(
+        strncmp(
+            log_level,
+            LOG_LEVEL_FATAL,
+            MIN(
+                ll_len,
+                strlen( LOG_LEVEL_FATAL )
+            )
+        ) == 0
+      )
     {
         __term();
     }
@@ -378,40 +425,44 @@ void _log( char * log_level, char * message, ... )
 }
 
 /*
- * void free_worker( struct worker * worker )
+ * void free_worker( struct worker * worker, bool free_only )
  *     Deallocates memory used by a process for handles and objects
  *
  * Arguments:
  *     struct worker * worker: workers[] array slice for the child process
+ *     bool free_only: Only free memory, do not close connections
  * Return:
  *     None
  * Error Conditions:
  *     None
  */
-void free_worker( struct worker * worker )
+void free_worker( struct worker * worker, bool free_only )
 {
     if( worker == NULL )
     {
         return;
     }
 
-    if( worker->conn != NULL && PQstatus( worker->conn ) == CONNECTION_OK )
+    if( !free_only )
     {
-        if( worker->tx_in_progress )
+        if( worker->conn != NULL && PQstatus( worker->conn ) == CONNECTION_OK )
         {
-            PQexec( worker->conn, "ROLLBACK" );
-            worker->tx_in_progress = false;
+            if( worker->tx_in_progress )
+            {
+                PQexec( worker->conn, "ROLLBACK" );
+                worker->tx_in_progress = false;
+            }
+
+            PQfinish( worker->conn );
+            worker->conn = NULL;
         }
 
-        PQfinish( worker->conn );
-        worker->conn = NULL;
-    }
-
-    if( worker->curl_handle != NULL )
-    {
-        curl_easy_cleanup( worker->curl_handle );
-        worker->curl_handle = NULL;
-        //curl_global_cleanup();
+        if( worker->curl_handle != NULL )
+        {
+            curl_easy_cleanup( worker->curl_handle );
+            worker->curl_handle = NULL;
+            //curl_global_cleanup();
+        }
     }
 
     munmap( worker, sizeof( struct worker ) );
@@ -423,28 +474,30 @@ void free_worker( struct worker * worker )
 bool logrotate( struct worker * me )
 {
     if( me == NULL )
-    {
         return false;
-    }
 
     if( me->type != WORKER_TYPE_PARENT )
-    {
         return false;
-    }
+
+    if( daemonize == false )
+        return true;
 
     if( log_file == NULL )
-    {
         return false;
-    }
 
     fclose( log_file );
     log_file = NULL;
 
-
+    errno = 0;
     log_file = fopen( LOG_FILE_NAME, "a" );
 
     if( log_file == NULL )
     {
+        fprintf(
+            stderr,
+            "Failed to rotate logfile: %s",
+            strerror( errno )
+        );
         return false;
     }
 
@@ -490,14 +543,19 @@ bool parent_init( int argc, char ** argv )
             return false;
         }
 
+        errno = 0;
         log_file = fopen( LOG_FILE_NAME, "a" );
 
         if( log_file == NULL )
         {
             fprintf(
                 stderr,
-                "Failed to open log file"
+                "\nFailed to open log file " LOG_FILE_NAME ": %s\n\
+Please verify that this directory is writable by \
+the current user\n",
+                strerror( errno )
             );
+            errno = 0;
             return false;
         }
     }
@@ -718,6 +776,7 @@ struct worker * new_worker(
     size_t          size   = 0;
     void *          data   = NULL;
     struct worker * worker = NULL;
+    unsigned int    tid    = 0;
 
     // Iff workerslot is provided, we reuse that SHM space
     if( workerslot == NULL )
@@ -753,6 +812,12 @@ struct worker * new_worker(
     result->tx_fail        = 0;
     result->tx_duration    = 0.0;
     result->last_heartbeat = time( NULL );
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+    result->commanded_shutdown = false;
+    result->commanded_refresh  = false;
+    result->new_event_jobs     = 0;
+    result->new_work_jobs      = 0;
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
 
     if(
             type != WORKER_TYPE_PARENT
@@ -779,7 +844,16 @@ struct worker * new_worker(
 
         if( workers == NULL )
         {
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+            // We cannot properly reallocate a shared memory mapping without
+            // restarting the processes we've forked after this point,
+            // otherwise we'll get a SIGSEGV. To circumvent this, we
+            // statically allocate the maximum size (8 bytes * MAX_WORKERS).
+            size = MAX_WORKERS * sizeof( struct worker * );
+#else
             size = ( work_jobs + event_jobs ) * sizeof( struct worker * );
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
+
 #ifdef DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
@@ -803,6 +877,15 @@ struct worker * new_worker(
                 LOG_LEVEL_DEBUG,
                 "PID table allocated at %p", workers
             );
+
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+            for( tid = 0; tid < MAX_WORKERS; tid++ )
+#else
+            for( tid = 0; tid < ( work_jobs + event_jobs ); tid++ )
+#endif
+            {
+                workers[tid] = NULL;
+            }
         }
 
         result->my_argv = argv;
@@ -816,7 +899,6 @@ struct worker * new_worker(
     }
 
     // prep to copy FH
-    _log( LOG_LEVEL_DEBUG, "Remapped PID table slot %u to %p", id, result );
 #ifdef ALLOW_CONFIG_MANAGER
     if( type == WORKER_TYPE_CONFIG_MANAGER )
     {
@@ -825,6 +907,7 @@ struct worker * new_worker(
     else
     {
 #endif // ALLOW_CONFIG_MANAGER
+    _log( LOG_LEVEL_DEBUG, "Remapped PID table slot %u to %p", id, result );
     workers[id] = result;
 #ifdef ALLOW_CONFIG_MANAGER
     }
@@ -1088,11 +1171,13 @@ void __sighup( int sig )
     me = get_worker_by_pid();
 
     got_sighup = true;
+
     if( me == NULL )
     {
         return;
     }
 
+    // Parent can immediately handle SIGHUP, children may be mid-tx
     if( me->type == WORKER_TYPE_PARENT )
     {
         if( logrotate( me ) == false )
@@ -1111,6 +1196,7 @@ void __sighup( int sig )
 
         // Verify that all children have acked the sighup
         // and re-entered the working state
+        got_sighup = false;
     }
 
     // Worker section
@@ -1131,7 +1217,6 @@ void __sighup( int sig )
 void __sigint( int sig )
 {
     got_sigint = true;
-
     _log(
         LOG_LEVEL_DEBUG,
         "Got SIGINT, Completing current transaction..."
@@ -1142,7 +1227,7 @@ void __sigint( int sig )
 
 /*
  * void __term( void )
- *     Termination handler for __sigint or fatal errors
+ *     Termination handler for SIGINT, SIGTERM or fatal errors
  * Arguments:
  *     None
  * Return:
@@ -1153,6 +1238,7 @@ void __term( void )
 {
     struct worker * me       = NULL;
     unsigned int    i        = 0;
+    unsigned int    j        = 0;
     struct stat     filestat = {0};
 
     me = get_worker_by_pid();
@@ -1168,6 +1254,7 @@ void __term( void )
         exit(0);
     }
 
+    _log( LOG_LEVEL_DEBUG, "__term() invoked for PID %d", getpid() );
     if( me->type != WORKER_TYPE_PARENT )
     {
         // just exit, let parent cleanup
@@ -1209,6 +1296,11 @@ void __term( void )
     {
         // TODO: Check got SIGCHLD
         // I'm the parent
+        _log(
+            LOG_LEVEL_INFO,
+            "Event Manager is exiting..."
+        );
+        sleep( 1 );
         for( i = 0; i < ( work_jobs + event_jobs ); i++ )
         {
             if( workers[i] != NULL )
@@ -1216,14 +1308,34 @@ void __term( void )
                 kill( workers[i]->pid, SIGTERM );
                 waitpid( workers[i]->pid, NULL, WNOHANG );
 
-                // Allow workers to clean up their mess
-                //free_worker( workers[i] );
-                workers[i] = NULL;
+                for( j = 0; j < WORKER_EXIT_TIMEOUT; j++ )
+                {
+                    if( workers[i]->status != STATUS_DEAD )
+                    {
+                        sleep( 1 );
+                    }
+                    else
+                    {
+                        free_worker( workers[i], true );
+                        workers[i] = NULL;
+                        break;
+                    }
+                }
             }
         }
 
         munmap( workers, sizeof( struct worker * ) * ( work_jobs + event_jobs ) );
         workers = NULL;
+
+#ifdef ALLOW_CONFIG_MANAGER
+        if( config != NULL )
+        {
+            kill( config->pid, SIGTERM );
+            waitpid( config->pid, NULL, WNOHANG );
+            free_worker( config, true );
+            config = NULL;
+        }
+#endif // ALLOW_CONFIG_MANAGER
 
         // Remove PID file prior to exit
 
@@ -1252,7 +1364,7 @@ void __term( void )
                 fclose( log_file );
             }
 
-            free_worker( parent );
+            free_worker( parent, false );
         }
     }
 
@@ -1265,6 +1377,12 @@ void __term( void )
  *    NOTE: Calling _log from within this function will cause a stack
  *    overflow
  *
+ *    TODO: I'll need to remove this to parent-only scope and have a
+ *    new_worker set a self pointer that's available between the parent
+ *    and worker. The only reason this doesn't SIGSEGV is because the workers
+ *    are spawned linearly, so n workers prior to me are in my memory map.
+ *    If we were to traverse the array backwards everything would explode
+ *    with no survivors
  * Arguments:
  *     None
  * Return:
@@ -1355,6 +1473,466 @@ void * create_shared_memory( size_t size )
     return ptr;
 }
 
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+void _resize_pid_table( void (*function)( void * ) )
+{ //XXX
+    struct worker *  me               = NULL;
+    struct worker *  temp_worker      = NULL;
+    struct worker ** temp             = NULL;
+    struct worker ** delta_array      = NULL;
+    struct worker ** old_workers      = NULL;
+    unsigned int *   dead_worker_ind  = NULL;
+    unsigned int     delta_ind        = 0;
+    unsigned int     new_worker_total = 0;
+    unsigned int     tid              = 0;
+    unsigned int     t_work_count     = 0;
+    unsigned int     t_event_count    = 0;
+    unsigned int     old_work_jobs    = 0;
+    unsigned int     old_event_jobs   = 0;
+    unsigned int     t_index          = 0;
+    unsigned int     target_work_cnt  = 0;
+    unsigned int     target_event_cnt = 0;
+    int              w_delta          = 0;
+    int              e_delta          = 0;
+    bool             flag_ptr_refresh = false;
+
+    me = get_worker_by_pid();
+    _log( LOG_LEVEL_DEBUG, "_resize_pid_table entry" );
+    if( me == NULL || me->type != WORKER_TYPE_PARENT )
+    {
+        _log( LOG_LEVEL_WARNING, "Illegal entry into _resize_pid_table" );
+        return;
+    }
+
+    old_workers    = workers;
+    old_event_jobs = event_jobs;
+    old_work_jobs  = work_jobs;
+
+    if( override_work_jobs != 0 && override_work_jobs != work_jobs )
+    {
+        new_worker_total += override_work_jobs;
+        w_delta           = override_work_jobs - work_jobs;
+        target_work_cnt   = override_work_jobs;
+    }
+    else
+    {
+        new_worker_total += work_jobs;
+        target_work_cnt   = work_jobs;
+    }
+
+    if( override_event_jobs != 0 && override_event_jobs != event_jobs )
+    {
+        new_worker_total += override_event_jobs;
+        e_delta           = override_event_jobs - event_jobs;
+        target_event_cnt  = override_event_jobs;
+    }
+    else
+    {
+        new_worker_total += event_jobs;
+        target_event_cnt  = event_jobs;
+    }
+
+    _log(
+        LOG_LEVEL_DEBUG,
+        "\nREMAP OF PID TABLE COMMANDED\n" \
+        " Old WC: %d, New WC: %d\n" \
+        " Old EC: %d, New EC: %d\n",
+        work_jobs,
+        target_work_cnt,
+        event_jobs,
+        target_event_cnt
+    );
+
+    if( new_worker_total > MAX_WORKERS )
+    {
+        _log(
+            LOG_LEVEL_ERROR,
+            "Cannot create more than %d workers (%d commanded)",
+            MAX_WORKERS,
+            new_worker_total
+        );
+        override_event_jobs = 0;
+        override_work_jobs = 0;
+        return;
+    }
+
+    if( new_worker_total != ( work_jobs + event_jobs ) )
+    {
+        // We'll actually need to resize the PID table
+        temp = ( struct worker ** ) calloc(
+            MAX_WORKERS,
+            sizeof( struct worker * )
+        );
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "\nPID table resize occuring\n"\
+            "old PID table %p (size %d)\n" \
+            "new PID table %p (size %d)\n",
+            workers,
+            ( work_jobs + event_jobs ),
+            temp,
+            new_worker_total
+        );
+
+        if( temp == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate new PID table, disregarding update"
+            );
+            override_event_jobs = 0;
+            override_work_jobs = 0;
+            return;
+        }
+
+        flag_ptr_refresh = true;
+    }
+    else
+    {
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Reusing old PID table as it's the correct size"
+        );
+    }
+
+    // PRUNE STAGE
+    if( w_delta < 0 || e_delta < 0 )
+    {
+        _log( LOG_LEVEL_DEBUG, "Entering prune stage, WD %d, ED %d", w_delta, e_delta );
+        delta_array = ( struct worker ** ) calloc(
+            abs( w_delta ) + abs( e_delta ),
+            sizeof( struct worker * )
+        );
+
+        dead_worker_ind = ( unsigned int * ) calloc(
+            abs( w_delta ) + abs( e_delta ),
+            sizeof( unsigned int )
+        );
+
+        if( delta_array == NULL || dead_worker_ind == NULL )
+        {
+            if( delta_array != NULL )
+                free( delta_array );
+
+            if( dead_worker_ind != NULL )
+                free( dead_worker_ind );
+
+            if( temp != NULL )
+                free( temp );
+
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to allocate memory during PID table remap"
+            );
+            override_work_jobs = 0;
+            override_event_jobs = 0;
+            return;
+        }
+
+        for( tid = 0; tid < ( work_jobs + event_jobs ); tid++ )
+        {
+            temp_worker = workers[tid];
+
+            if( temp_worker == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Existing PID table is invalid"
+                );
+                if( temp != NULL )
+                    free( temp );
+                if( delta_array != NULL )
+                    free( delta_array );
+                if( dead_worker_ind != NULL )
+                    free( dead_worker_ind );
+                return;
+            }
+
+            if( temp_worker->type == WORKER_TYPE_EVENT_PROCESSOR )
+            {
+                t_event_count++;
+
+                if( t_event_count > target_event_cnt )
+                {
+                    delta_array[delta_ind]          = temp_worker;
+                    dead_worker_ind[delta_ind]      = tid;
+                    temp_worker->commanded_shutdown = true;
+                    delta_ind++;
+                    _log(
+                        LOG_LEVEL_DEBUG,
+                        "event processor %d has been selected for termination",
+                        temp_worker->pid
+                    );
+                }
+                else
+                {
+                    _log(
+                        LOG_LEVEL_DEBUG,
+                        "event processor (%d) workers[%d] remaped to temp[%d]",
+                        temp_worker->pid,
+                        tid,
+                        t_index
+                    );
+                    temp[t_index] = temp_worker;
+                    t_index++;
+                }
+            }
+            else if( temp_worker->type == WORKER_TYPE_WORK_PROCESSOR )
+            {
+                t_work_count++;
+
+                if( t_work_count > target_work_cnt )
+                {
+                    delta_array[delta_ind]          = temp_worker;
+                    dead_worker_ind[delta_ind]      = tid;
+                    temp_worker->commanded_shutdown = true;
+                    delta_ind++;
+                    _log(
+                        LOG_LEVEL_DEBUG,
+                        "work processor %d has been selected for termination",
+                        temp_worker->pid
+                    );
+                }
+                else
+                {
+                    _log(
+                        LOG_LEVEL_DEBUG,
+                        "work processor (%d) workers[%d] remaped to temp[%d]",
+                        temp_worker->pid,
+                        tid,
+                        t_index
+                    );
+                    temp[t_index] = temp_worker;
+                    t_index++;
+                }
+            }
+        }
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "shutting down %d workers",
+            delta_ind
+        );
+
+        for( tid = 0; tid < delta_ind; tid++ )
+        {
+            temp_worker = delta_array[tid];
+            while( !((delta_array[tid])->status == STATUS_DEAD ) )
+            {
+                _log( LOG_LEVEL_DEBUG, "parent waiting for %d to exit (status %d)...", temp_worker->pid, (delta_array[tid])->status );
+                sleep( 1 );
+                temp_worker->commanded_shutdown = true;
+                kill( temp_worker->pid, SIGHUP );
+            }
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Child %d has shutdown",
+                (delta_array[tid])->pid
+            );
+        }
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "All delta workers shutdown"
+        );
+
+        for( tid = 0; tid < delta_ind; tid++ )
+        {
+            temp_worker = workers[dead_worker_ind[tid]];
+            workers[dead_worker_ind[tid]] = NULL;
+            munmap( temp_worker, sizeof( struct worker ) );
+        }
+
+        _log(
+            LOG_LEVEL_DEBUG,
+            "Dead worker PID table entries pruned"
+        );
+        free( dead_worker_ind );
+        free( delta_array );
+    }
+    else
+    {
+        // temp is larger, remap into temp
+        for( tid = 0; tid < ( work_jobs + event_jobs ); tid++ )
+        {
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Remapped worker %d workers[%d] to temp[%d]",
+                (workers[tid])->pid,
+                tid,
+                t_index
+            );
+            temp[t_index] = workers[tid];
+            t_index++;
+        }
+    }
+
+    // Set vals and stash them prior to forking new workers
+    work_jobs  = target_work_cnt;
+    event_jobs = target_event_cnt;
+
+    // Remap done, pruning done, need to spawn new workers if necessary. t_index will point into the new temp array
+    if( w_delta > 0 )
+    {
+        for( tid = 0; tid < w_delta; tid++ )
+        {
+            temp_worker = new_worker(
+                WORKER_TYPE_WORK_PROCESSOR,
+                t_index,
+                function,
+                me->my_argc,
+                me->my_argv,
+                NULL
+            );
+
+            if( temp_worker == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Spawning new work queue worker for PID table index %d failed",
+                    t_index
+                );
+                return;
+            }
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Spawned new work queue worker (%d) at temp[%d]",
+                temp_worker->pid,
+                t_index
+            );
+
+            temp[t_index] = temp_worker;
+            t_index++;
+        }
+    }
+
+    if( e_delta > 0 )
+    {
+        for( tid = 0; tid < e_delta; tid++ )
+        {
+            temp_worker = new_worker(
+                WORKER_TYPE_EVENT_PROCESSOR,
+                t_index,
+                function,
+                me->my_argc,
+                me->my_argv,
+                NULL
+            );
+
+            if( temp_worker == NULL )
+            {
+                _log(
+                    LOG_LEVEL_ERROR,
+                    "Spawning new event queue worker for PID table index %d failed",
+                    t_index
+                );
+                return;
+            }
+
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Spawned new event queue worker (%d) at temp[%d]",
+                temp_worker->pid,
+                t_index
+            );
+
+            temp[t_index] = temp_worker;
+            t_index++;
+        }
+    }
+
+    if( flag_ptr_refresh )
+    {
+        for( tid = 0; tid < MAX_WORKERS; tid++ )
+        {
+            workers[tid] = temp[tid];
+        }
+
+        // Need to signal workers that the PID table is updated
+        for( tid = 0; tid < ( old_work_jobs + old_event_jobs ); tid++ )
+        {
+            temp_worker = workers[tid];
+            if( temp_worker == NULL )
+                continue;
+
+            _log( LOG_LEVEL_DEBUG, "Entering pointer reload state for %d", temp_worker->pid );
+            temp_worker->new_event_jobs    = target_event_cnt;
+            temp_worker->new_work_jobs     = target_work_cnt;
+            temp_worker->status            = STATUS_REFRESH;
+            temp_worker->commanded_refresh = true;
+
+            _log( LOG_LEVEL_DEBUG, "Entering wait state for %d reload", temp_worker->pid );
+            // Indicates it has loaded new ptrs and discarded old pid table entry
+            while( !( (old_workers[tid])->status == STATUS_WORKING ) )
+            {
+                _log( LOG_LEVEL_DEBUG, "Parent waiting for worker %d to reload", temp_worker->pid );
+                temp_worker->commanded_refresh = true;
+                kill( temp_worker->pid, SIGHUP );
+                sleep( 1 );
+            }
+
+            _log( LOG_LEVEL_DEBUG, "Worker %d has reloaded pointers", temp_worker->pid );
+        }
+
+        free( temp );
+    }
+
+    return;
+}
+
+void _child_update_pointers( void )
+{
+    struct worker * me = NULL;
+
+    me = get_worker_by_pid();
+
+    if( me == NULL )
+        return;
+
+    if( !me->commanded_refresh )
+        return;
+
+    _log(
+        LOG_LEVEL_DEBUG,
+        "\nPID %d updating PID table:\n"\
+        " old %p \n"\
+        " old_wc: %d, new %d \n"\
+        " old_ec: %d, new %d \n",
+        getpid(),
+        workers,
+        work_jobs,
+        me->new_work_jobs,
+        event_jobs,
+        me->new_event_jobs
+    );
+
+    work_jobs  = me->new_work_jobs;
+    event_jobs = me->new_event_jobs;
+
+    me->new_work_jobs     = 0;
+    me->new_event_jobs    = 0;
+    me->commanded_refresh = false;
+    me->status            = STATUS_WORKING;
+
+    // Just sanity check that the PID table lookup works
+    me = get_worker_by_pid();
+
+    if( me == NULL || me->pid != getpid() )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Worker %d failed to get updated PID entry",
+            getpid()
+        );
+    }
+
+    return;
+}
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
+
 /*
  * void _manage_children( void (*function)( void * )
  *     Task for parent process to run, monitors child processes for
@@ -1391,6 +1969,7 @@ void _manage_children( void (*function)( void * ) )
             _parent_handle_sighup();
         }
 
+        _log( LOG_LEVEL_DEBUG, "Checking TID %d of workers %p", tid, workers );
         if( workers[tid] == NULL )
         {
             _log(
@@ -1425,7 +2004,7 @@ void _manage_children( void (*function)( void * ) )
         {
             _log(
                 LOG_LEVEL_WARNING,
-                "Found dead worker (%s queue, pid %d),"\
+                "Found dead worker (%s, pid %d),"\
                 " (sigt flag: %s) restarting...",
                 type == WORKER_TYPE_EVENT_PROCESSOR ? "Event" : "Work",
                 pid,
@@ -1450,7 +2029,6 @@ void _manage_children( void (*function)( void * ) )
 
                 if( ALLOW_WORKER_RESTART && function != NULL )
                 {
-                    _log( LOG_LEVEL_DEBUG, "In restart block" );
                     if( got_sigterm || got_sigint )
                     {
                         __term();
@@ -1527,6 +2105,66 @@ void _manage_children( void (*function)( void * ) )
         }
     }
 
+#ifdef ALLOW_CONFIG_MANAGER
+    pid = config->pid;
+    waitpid( pid, &wstatus, WNOHANG );
+
+    if( WIFSIGNALED( wstatus ) ) // Detect abnormal exit
+    {
+        config->status = STATUS_DEAD;
+
+        _log(
+            LOG_LEVEL_WARNING,
+            "Worker process %d found dead from signal %d",
+            pid,
+            WTERMSIG( wstatus )
+        );
+    }
+
+    wstatus = 0;
+
+    if( config->status == STATUS_DEAD )
+    {
+        int status;
+
+        _log(
+            LOG_LEVEL_WARNING,
+            "Config Manager found dead, restarting..."
+        );
+
+        waitpid( pid, &status, WNOHANG );
+
+        if( status != 0 )
+        {
+            // Child terminated abnormally or is in a stopped state
+            kill( pid, SIGTERM );
+            waitpid( pid, NULL, WNOHANG );
+        }
+
+        new_worker(
+            WORKER_TYPE_CONFIG_MANAGER,
+            0,
+            function,
+            parent->my_argc,
+            parent->my_argv,
+            config
+        );
+
+        if( config == NULL )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Failed to restart config manager"
+            );
+        }
+
+    }
+    else
+    {
+        config->last_heartbeat = time( NULL );
+    }
+#endif // ALLOW_CONFIG_MANAGER
+
     return;
 }
 
@@ -1535,6 +2173,27 @@ void _child_handle_sighup( void )
     struct worker * me = NULL;
 
     me = get_worker_by_pid();
+
+    if( me == NULL )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "PID %d got invalid PID table entry",
+            getpid()
+        );
+        got_sighup = false;
+        return;
+    }
+
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+    if( me->status == STATUS_REFRESH )
+    {
+        _child_update_pointers();
+        got_sighup = false;
+        me->status = STATUS_WORKING;
+        return;
+    }
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
 
     me->status = STATUS_RELOAD;
     _log(
@@ -1769,6 +2428,7 @@ void _set_process_title(
     size = *max_size;
     memset( argv[0], '\0', size );
     strncpy( argv[0], title, strlen( title ) );
+    argv[0][strlen(title)] = '\0';
     return;
 }
 
@@ -1801,7 +2461,7 @@ void _debug_worker_slot( struct worker * worker )
         worker->curl_handle,
         (int) worker->pid,
         worker->type == WORKER_TYPE_PARENT ? "PARENT" :
-            worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" : 
+            worker->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
             worker->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
 #ifdef ALLOW_CONFIG_MANAGER
             worker->type == WORKER_TYPE_CONFIG_MANAGER ? "CONFIG " :
@@ -1811,7 +2471,12 @@ void _debug_worker_slot( struct worker * worker )
         worker->enable_curl == true ? "YES" : "NO",
         worker->status == STATUS_DEAD ? "DEAD" :
             worker->status == STATUS_STARTUP ? "STARTUP" :
-                worker->status == STATUS_WORKING ? "WORKING" : "RELOAD",
+#ifdef ALLOW_OVERRIDE_WORKER_COUNTS
+            worker->status == STATUS_REFRESH ? "REFRESH" :
+#endif // ALLOW_OVERRIDE_WORKER_COUNTS
+            worker->status == STATUS_WORKING ? "WORKING" :
+            worker->status == STATUS_RELOAD ? "RELOAD" :
+            "UNKNOWN",
         worker->my_argc,
         worker->my_argv,
         worker->pidfile
