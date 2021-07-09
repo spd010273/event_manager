@@ -45,6 +45,7 @@ It will return an itemized list of passed tests, stopping on the first failure
 Regression tests can be performed by using run_tests.pl, and debugging can be done using Valgrind.
 
 event_manager can be started with valgrind either:
-- manually
-- running `make buildcheck`
-- or running run_with_valgrind.sh within the test directory.
+
+* manually
+* running `make buildcheck`
+* or running run_with_valgrind.sh within the test directory.

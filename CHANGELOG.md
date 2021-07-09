@@ -21,5 +21,7 @@
 
 ### Fixed:
 - Possible SIGSEGV on parent __term() invokation on slow machines / with valgrind running (race condition)
+- Possible SIGSEVG in transaction failure marking
 - Test harness (run_tests.pl) improperly handling versions
 - Usage of strcpy/strcat/strcmp (now slightly less dangerous strncpy/strncat/strncmp)
+- Memory leak in stat update (not freeing result handle)

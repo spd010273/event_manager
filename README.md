@@ -72,11 +72,4 @@ It is important that event_manager.tb_setting contains appropriate values for yo
 
 ## Changelog
 
-### Version 0.1
-Initial Version
-
-### Version 0.2
-* Add configuration manager that SIGHUPs event_manager when database settings change
-* Minor changes to cURL handle instantiation/cleanup to handle odd behavior during lulls (in progress)
-* Add consolidated GUC interpretation logic
-* Add add GUCs for selectively disabling queues while debugging.
+See CHANGELOG.md

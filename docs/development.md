@@ -49,6 +49,7 @@ See docs/test.md for test prerequisites for and installation of tests. This test
 ## Versioning
 
 This extension uses PGXS. Modifications between versions require files for a clean install of said version, and files that upgrade older versions to the new version, for example. If you were to implement version X.Y, you would need:
+
 * sql/event_manager--X.Y.sql
 * sql/event_manager--<old_version>--X.Y.sql
 
@@ -56,4 +57,4 @@ Additionally, you will need to write tests for the new version in test/sql/vX.Y/
 
 ## Notes
 
-* Remote calls will show as coming from User Agent 'EventManagerbot/0.1 (+https://bitbucket.org/neadwerx/event_manager/src/master/)'
+Remote calls will show as coming from User Agent 'EventManagerbot/0.1 (+https://bitbucket.org/neadwerx/event_manager/src/master/)'
