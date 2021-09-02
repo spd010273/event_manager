@@ -3,10 +3,10 @@
  * util.h
  *     Utility function prototypes and process managment routines
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        util.h
+ *        src/lib/util.h
  *
  *------------------------------------------------------------------------
  */
@@ -78,6 +78,52 @@
 #define MAX(x,y) x>y ? x : y
 #define MIN(x,y) x<y ? x : y
 
+#ifdef ALLOW_CACHE
+#define CACHE_MAX_LENGTH 1024
+// Action / ETWI SHM cache
+struct event_table_work_item_entry {
+    unsigned int      action;
+    char *            transaction_label;
+    unsigned long int l_transaction_label;
+    char *            work_item_query;
+    unsigned long int l_work_item_query;
+#ifdef ALLOW_BULK_AND_DEDUPE
+    bool              can_deduplicate;
+    bool              can_bulk_execute;
+#endif // ALLOW_BULK_AND_DEDUPE
+    bool              execute_asynchronously;
+};
+
+struct action_entry {
+    char *            query;
+    unsigned long int l_query;
+    bool              use_ssl;
+    char *            method;
+    unsigned short    l_method;
+#ifdef ALLOW_BULK_AND_DEDUPE
+    bool              can_deduplicate;
+    bool              can_bulk_execute;
+#endif // ALLOW_BULK_AND_DEDUPE
+};
+
+// This is the 'handle' for the cache - containing sparse arrays for each entry for each table:
+// - tb_event_table_work_item - for event items
+// - tb_action - for work items
+// The array of structures are PK-indexed, meaning their array positions correspond to the tuple's
+// value of that PK (tb_action.action, tb_event_table_work_item.event_table_work_item)
+// The unsigned int arrays convert between the 0-indexed access to the PK-indexed access, so that we cannot
+// lose track of what has been allocated and what has not.
+struct cache {
+    bool                                  locked; // Block reads
+    struct action_entry **                action_entry_cache;
+    unsigned int *                         action_entry_map;
+    unsigned int                          _n_action_entry;
+    struct event_table_work_item_entry ** event_table_work_item_entry_cache;
+    unsigned int *                        event_table_work_item_entry_map;
+    unsigned int                          _n_event_table_work_item_entry;
+};
+#endif // ALLOW_CACHE
+
 /*
  *  Structure used to store worker initialization at fork time,
  *  as well as store worker specific handles
@@ -135,6 +181,9 @@ struct worker {
     double         tx_duration; // Duration of all tx since last update, in seconds
     bool           stat_update; // Semaphore for stat collector routine
     time_t         last_heartbeat; // Workaround for systemd not reaping children
+#ifdef ALLOW_CACHE
+    struct cache * _cache; // Cache for event_table_work_items / actions
+#endif // ALLOW_CACHE
 #ifdef ALLOW_OVERRIDE_WORKER_COUNTS
     bool             commanded_shutdown; // Parent has commanded this process to shutdown
     bool             commanded_refresh; // Parent is updating the PID table, this process will need to update pointers
@@ -215,8 +264,8 @@ void _update_stats(
 );
 
 // Mutex helpers
-bool _wait_and_set_mutex( struct worker * );
-bool __test_and_set( struct worker * );
+bool _wait_and_set_mutex( bool * );
+bool __test_and_set( bool * );
 
 void _parent_handle_sighup( void );
 void _child_handle_sighup( void );

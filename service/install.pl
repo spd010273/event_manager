@@ -6,7 +6,7 @@
  * install.pl
  *     Basic systemctl installer for Event Manager
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        install.pl

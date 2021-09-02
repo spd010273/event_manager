@@ -3,10 +3,10 @@
  * query_helper.h
  *     Prototypes for query parameterization functionality
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        query_helper.h
+ *        src/lib/query_helper.h
  *
  *------------------------------------------------------------------------
  */

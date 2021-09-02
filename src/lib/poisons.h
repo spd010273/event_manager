@@ -3,10 +3,10 @@
  * poisons.h
  *     Function / Variable strictures and poisoning
  *
- * Copyright (c) 2021, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        poisons.h
+ *        src/lib/poisons.h
  *
  *------------------------------------------------------------------------
  */

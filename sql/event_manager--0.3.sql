@@ -1,12 +1,12 @@
 /*-----------------------------------------------------------------------------
  *
- * event_manager--0.2.sql
- *     Event Manager extension schema for version 0.2
+ * event_manager--0.3.sql
+ *     Event Manager extension schema for version 0.3
  *
  * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        event_manager--0.2.sql
+ *        event_manager--0.3.sql
  *
  *-----------------------------------------------------------------------------
  */
@@ -134,8 +134,11 @@ CREATE TABLE @extschema@.tb_action
     method              VARCHAR(4),
     static_parameters   JSONB,
     use_ssl             BOOLEAN NOT NULL DEFAULT FALSE,
+    can_deduplicate     BOOLEAN NOT NULL DEFAULT FALSE,
+    can_bulk_execute    BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK( uri IS NOT NULL OR query IS NOT NULL ),
-    CHECK( ( method IS NULL OR method IN( 'PUT', 'POST', 'GET' ) ) )
+    CHECK( ( method IS NULL OR method IN( 'PUT', 'POST', 'GET' ) ) ),
+    CHECK( ( can_bulk_execute IS TRUE AND method IS NULL ) OR can_bulk_execute IS FALSE ) -- Cannot bulk execute URI calls
 );
 
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.sq_pk_action', '' );
@@ -147,6 +150,8 @@ COMMENT ON COLUMN @extschema@.tb_action.uri IS 'Allows the developer to specify 
 COMMENT ON COLUMN @extschema@.tb_action.method IS 'HTTP method for the above endpoint (PUT,GET,POST)';
 COMMENT ON COLUMN @extschema@.tb_action.static_parameters IS 'A list of static parameters for either the query or URI parameter list';
 COMMENT ON COLUMN @extschema@.tb_action.use_ssl IS 'Indicates that event_manager should turn SSL on in cURL prior to making an HTTP request';
+COMMENT ON COLUMN @extschema@.tb_action.can_deduplicate IS 'Indicates that this action is fully idempotent and can be deduplicated if multiple instances of this action are found with the same parameters';
+COMMENT ON COLUMN @extschema@.tb_action.can_bulk_execute IS 'Indicates that work items of this action can be executed en-masse';
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item;
 CREATE TABLE @extschema@.tb_event_table_work_item
@@ -164,6 +169,8 @@ CREATE TABLE @extschema@.tb_event_table_work_item
     op                      CHAR(1)[] NOT NULL,
     execute_asynchronously  BOOLEAN DEFAULT COALESCE( @extschema@.fn_get_config( '@extschema@.execute_asynchronously' )::BOOLEAN, TRUE ),
     inverse_event           INTEGER,
+    can_deduplicate         BOOLEAN NOT NULL DEFAULT FALSE,
+    can_bulk_execute        BOOLEAN NOT NULL DEFAULT FALSE,
     CHECK( ( op <@ ARRAY[ 'I','U','D' ]::CHAR(1)[] ) )
 );
 
@@ -191,6 +198,8 @@ COMMENT ON COLUMN @extschema@.tb_event_table_work_item.when_function IS 'Filters
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.op IS 'Indicates what DML operation this work item applies: U - Update, I - Insert, D - Delete.';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.execute_asynchronously IS 'Determines what mode of execution this work item will be ran under.';
 COMMENT ON COLUMN @extschema@.tb_event_table_work_item.inverse_event IS 'Indicates that this event has an inverse event buy linking to it';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.can_deduplicate IS 'Indicates that this ETWI is fully idempotent and can be deduplicated if multiple instances are found with the same parameters. Unlike actions, ETWIs are more reliant on database state and this flag should be more carefully considered';
+COMMENT ON COLUMN @extschema@.tb_event_table_work_item.can_bulk_execute IS 'Indicates that this ETWI can be executed with other events of the same type en-masse';
 
 DO
  $_$
@@ -222,6 +231,10 @@ ALTER TABLE @extschema@.tb_event_queue
     ADD COLUMN session_values JSONB,
     ADD COLUMN failed BOOLEAN NOT NULL DEFAULT FALSE,
     ADD CONSTRAINT op_check CHECK ( ( op IN( 'D', 'U', 'I' ) ) );
+
+CREATE INDEX ix_event_queue_event_table_work_item_recorded
+          ON @extschema@.tb_event_queue( event_table_work_item, recorded )
+       WHERE execute_asynchronously IS TRUE;
 
 SELECT pg_catalog.pg_extension_config_dump( '@extschema@.tb_event_queue', '' );
 COMMENT ON TABLE @extschema@.tb_event_queue IS 'Queue for events arriving from tb_event_tables. Contents are copied from their corresponding event_table_work_item entry.';
@@ -274,6 +287,10 @@ COMMENT ON COLUMN @extschema@.tb_work_queue.transaction_label IS 'Label for tran
 COMMENT ON COLUMN @extschema@.tb_work_queue.execute_asynchronously IS 'Indicates how this action should be executed';
 COMMENT ON COLUMN @extschema@.tb_work_queue.session_values IS 'Copy of the session values from the event queue';
 COMMENT ON COLUMN @extschema@.tb_work_queue.failed IS 'Indicates that this item has been dequeued but failed to execute due to a problem with the API endpoint or the query itself.';
+
+CREATE INDEX ix_work_queue_action_recorded
+          ON @extschema@.tb_work_queue( action, recorded )
+       WHERE execute_asynchronously IS TRUE;
 
 CREATE SEQUENCE @extschema@.sq_pk_event_table_work_item_instance;
 CREATE TABLE @extschema@.tb_event_table_work_item_instance

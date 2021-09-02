@@ -3,10 +3,10 @@
  * event_manager.h
  *     Prototypes for main event / work handlers and helper functions
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        event_manager.h
+ *        src/event_manager.h
  *
  *------------------------------------------------------------------------
  */
@@ -117,6 +117,12 @@ static bool db_connect( struct worker * );
 #ifdef ALLOW_OVERRIDE_WORKER_COUNTS
 static void _get_child_counts_from_db( void );
 #endif // ALLOW_OVERRIDE_WORKER_COUNTS
+#ifdef ALLOW_BULK_AND_DEDUPE
+#endif // ALLOW_BULK_AND_DEDUPE
+#ifdef ALLOW_CACHE
+static void _setup_cache( void );
+#endif // ALLOW_CACHE
+
 // Integration functions
 static void _cyanaudit_integration( struct worker *, char * );
 

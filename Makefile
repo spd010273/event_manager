@@ -23,7 +23,7 @@ define __VERSION_H_SOURCE
  * version.h
  *     Versioning information and feature flags
  *
- * Copyright (c) 2021, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        version.h
@@ -45,6 +45,9 @@ define __VERSION_H_SOURCE
   #define REDEF_CURL_HANDLE
   #define ALLOW_QUEUE_CHECK_WITH_GUC
   #define ALLOW_OVERRIDE_WORKER_COUNTS
+ #elif defined MINOR_VERSION & MINOR_VERSION >= 3
+  #define ALLOW_BULK_AND_DEDUPE
+  #define ALLOW_CACHE
  #endif // MINOR_VERSION
 #endif // MAJOR_VERSION
 
@@ -52,8 +55,8 @@ define __VERSION_H_SOURCE
 endef
 export __VERSION_H_SOURCE
 
-event_manager: version.h src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o
-	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl ${DEBUG}
+event_manager: version.h src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o src/lib/em_shm.o
+	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o src/lib/em_shm.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl ${DEBUG}
 
 version.h:
 	./tools/valid_version_check.pl

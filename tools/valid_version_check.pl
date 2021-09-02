@@ -8,7 +8,7 @@ use Cwd qw( abs_path );
 use Carp;
 
 # Simply verify the version string in CURRENT_VERSION is valid form and acceptable range
-Readonly my $VALID_VERSION => [ '0.1', '0.2' ];
+Readonly my $VALID_VERSION => [ '0.1', '0.2', '0.3' ];
 Readonly my $FILE          => 'CURRENT_VERSION';
 Readonly my $ALT_FILE      => '../CURRENT_VERSION';
 

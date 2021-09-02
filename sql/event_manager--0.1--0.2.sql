@@ -3,7 +3,7 @@
  * event_manager--0.1--0.2.sql
  *     Upgrade script for transitioning from version 0.1 to 0.2
  *
- * Copyright (c) 2021, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        event_manager--0.1--0.2.sql

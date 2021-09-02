@@ -5,7 +5,7 @@
  * run_tests.pl
  *     Test suite for synchronous event triggering and basic async events
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        run_tests.pl

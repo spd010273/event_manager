@@ -3,10 +3,10 @@
  * util.c
  *     Utility and process management functions
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        util.c
+ *        src/lib/util.c
  *
  *------------------------------------------------------------------------
  */
@@ -1004,7 +1004,7 @@ void _gather_child_stats_to_self( struct em_stat ** stats )
         }
 
         // check mutex
-        if( _wait_and_set_mutex( workers[i] ) == false )
+        if( _wait_and_set_mutex( &(workers[i]->stat_update) ) == false )
         {
             continue;
         }
@@ -1047,7 +1047,7 @@ void _update_stats(
         return;
     }
 
-    if( _wait_and_set_mutex( me ) == false )
+    if( _wait_and_set_mutex( &(me->stat_update) ) == false )
     {
         return;
     }
@@ -1072,13 +1072,13 @@ void _update_stats(
     return;
 }
 
-bool _wait_and_set_mutex( struct worker * me )
+bool _wait_and_set_mutex( bool * mutex )
 {
     time_t lock_acquire_start = 0;
     double random_backoff     = 0.0;
     double last_backoff       = 0.0;
 
-    if( me == NULL )
+    if( mutex == NULL )
     {
         return false;
     }
@@ -1098,7 +1098,7 @@ bool _wait_and_set_mutex( struct worker * me )
      */
     last_backoff = 1.0;
 
-    while( me->stat_update == true || __test_and_set( me ) == true )
+    while( *mutex == true || __test_and_set( mutex ) == true )
     {
         if( difftime( time( NULL ), lock_acquire_start ) > MAX_LOCK_WAIT )
         {
@@ -1115,15 +1115,15 @@ bool _wait_and_set_mutex( struct worker * me )
         random_backoff = 2 * ( ( double ) rand() / ( double ) RAND_MAX );
     }
 
-    me->stat_update = true;
+    *mutex = true;
     return true;
 }
 
-bool __test_and_set( struct worker * me )
+bool __test_and_set( bool * mutex )
 {
     bool initial = true;
-    initial = me->stat_update;
-    me->stat_update = true;
+    initial = *mutex;
+    *mutex = true;
     return initial;
 }
 
@@ -1442,6 +1442,14 @@ struct worker * get_worker_by_pid()
  *     NULL on error
  * Error Conditions:
  *     Emits error and returns NULL on allocation failure
+ *
+ * Note that the allocator will need to be switched between
+ * mmap and the IPC calls ftok, shmget, shmat, shmdt, shmctl
+ * to prevent SIGSEGVs when accessing shared memory that is
+ * allocated or reallocated in steady-state runtime. Most of the
+ * current allocations occur pre-fork meaning that the shm space is
+ * in the parent and child's memory map. These are in
+ * <sys/shm.h> and <sys/ipc.h>
  */
 
 void * create_shared_memory( size_t size )

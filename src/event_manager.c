@@ -3,10 +3,10 @@
  * event_manager.c
  *     Main event_manager routine and functions
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        event_manager.c
+ *        src/event_manager.c
  *
  *------------------------------------------------------------------------
  */
@@ -982,6 +982,10 @@ static int event_queue_handler( struct worker * me )
     char *                new                    = NULL;
     char *                session_values         = NULL;
     char *                parameters             = NULL;
+#ifdef ALLOW_BULK_AND_DEDUPE
+    char *                can_deduplicate        = NULL;
+    char *                can_bulk_execute       = NULL;
+#endif // ALLOW_BULK_AND_DEDUPE
     char *                params[9]              = {NULL};
     register unsigned int i                      = 0;
 
@@ -1048,6 +1052,10 @@ static int event_queue_handler( struct worker * me )
     old                    = get_column_value( 0, result, "old" );
     new                    = get_column_value( 0, result, "new" );
     session_values         = get_column_value( 0, result, "session_values" );
+#ifdef ALLOW_BULK_AND_DEDUPE
+    can_bulk_execute       = get_column_value( 0, result, "can_bulk_execute" );
+    can_deduplicate        = get_column_value( 0, result, "can_deduplicate" );
+#endif // ALLOW_BULK_AND_DEDUPE
 
     set_session_gucs( me, session_values );
     work_item_query_obj = _new_query( work_item_query );
@@ -1256,13 +1264,17 @@ static int event_queue_handler( struct worker * me )
  */
 static int work_queue_handler( struct worker * me )
 {
-    PGresult *            result        = NULL;
-    PGresult *            delete_result = NULL;
-    PGresult *            update_result = NULL;
-    bool                  action_result = false;
-    int                   row_count     = 0;
-    char *                params[7]     = {NULL};
-    register unsigned int i             = 0;
+    PGresult *            result           = NULL;
+    PGresult *            delete_result    = NULL;
+    PGresult *            update_result    = NULL;
+    bool                  action_result    = false;
+    int                   row_count        = 0;
+    char *                params[7]        = {NULL};
+#ifdef ALLOW_BULK_AND_DEDUPE
+    char *                can_bulk_execute = NULL;
+    char *                can_deduplicate  = NULL;
+#endif // ALLOW_BULK_AND_DEDUPE
+    register unsigned int i                = 0;
 
     _log(
         LOG_LEVEL_DEBUG,
@@ -1323,6 +1335,11 @@ static int work_queue_handler( struct worker * me )
         params[5] = get_column_value( i, result, "session_values" );
         params[6] = get_column_value( i, result, "ctid" );
 
+#ifdef ALLOW_BULK_AND_DEDUPE
+        can_bulk_execute = get_column_value( i, result, "can_bulk_execute" );
+        can_deduplicate  = get_column_value( i, result, "can_deduplicate" );
+#endif // ALLOW_BULK_AND_DEDUPE
+
         /* Get detailed information about action, get parameter list */
         _log(
             LOG_LEVEL_DEBUG,
@@ -1371,6 +1388,7 @@ static int work_queue_handler( struct worker * me )
                     me->tx_in_progress = false;
                 }
             }
+
             PQclear( result );
 
             return -1;
@@ -2579,6 +2597,10 @@ int main( int argc, char ** argv )
 
     PQclear( result );
 
+#ifdef ALLOW_CACHE
+    _setup_cache();
+#endif // ALLOW_CACHE
+
     /* Check for cyanaudit integration */
     cyanaudit_result = _execute_query(
         parent,
@@ -3729,3 +3751,547 @@ static bool _get_advisory_lock( struct worker * me )
     PQclear( result );
     return false;
 }
+
+#ifdef ALLOW_CACHE
+/*
+ * static void _setup_cache( void )
+ *     Initializes or re-initializes the shared cache. This cache is in the following format:
+ *     struct cache
+ *         bool locked - mutex indicating that the cache is being updated
+ *         struct action_entry ** -- sparse array of primary key indexed cache entries for event_manager.tb_action.
+ *         unsigned int * action_entry_map -- array of the allocated PK positions in the above array
+ *         unsigned int _n_action_entry -- number of elements in the map array
+ *         struct event_Table_Work_item_entry ** -- array of primary key indexed cache entries for
+ *             event_manager.tb_event_table_work_item.
+ *         unsigned int * event_table_work_item_entry_map -- array of the allocated PK positions in the above array
+ *         unsigned int _n_event_table_work_item_entry -- number of elements in the map array
+ */
+static void _setup_cache( void )
+{
+    struct worker *                      me                     = NULL;
+    struct cache *                       _cache                 = NULL;
+    unsigned int                         i                      = 0;
+    unsigned int                         j                      = 0;
+    struct action_entry *                ae                     = NULL;
+    struct event_table_work_item_entry * etwie                  = NULL;
+    PGresult *                           result                 = NULL;
+    unsigned int                         etwi                   = 0;
+    unsigned int                         a                      = 0;
+#ifdef ALLOW_BULK_AND_DEDUPE
+    char *                               can_deduplicate        = NULL;
+    char *                               can_bulk_execute       = NULL;
+#endif // ALLOW_BULK_AND_DEDUPE
+    char *                               execute_asynchronously = NULL;
+
+    me = get_worker_by_pid();
+
+    if( me == NULL || me->type != WORKER_TYPE_PARENT )
+        return;
+
+    if( me->cache == NULL )
+    {
+        // Initialize cache
+        _cache = ( struct cache * ) create_shared_memory( sizeof( struct cache ) );
+
+        if( _cache == NULL )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "Failed to initialize cache"
+            );
+        }
+
+        _cache->locked = true;
+        _cache->_n_event_table_work_item_entry = 0;
+        _cache->_n_action_entry = 0;
+
+        me->cache = _cache;
+
+        // These are initialized early to a static length to avoid reallocations
+        // of the arrays used by the child processes. Doing an early allocation
+        // means the array will be in the memory map of forked children and will
+        // not change as we have to do runtime reallocations to size the array
+        // up or down. The downside is having to use a large static allocation.
+        // This is similar to how the PID table is allocated in util.c
+        // Perhaps we can switch to a different allocation model.
+        _cache->event_table_work_item_entry_cache = ( struct event_table_work_item_entry ** ) create_shared_memory(
+            sizeof( struct event_table_work_item_entry * ) * CACHE_MAX_LENGTH
+        );
+
+        _cache->action_entry_cache = ( struct action_entry ** ) create_shared_memory(
+            sizeof( struct action_entry * ) * CACHE_MAX_LENGTH
+        );
+
+        if( _cache->action_entry_cache == NULL || _cache->event_table_work_item_entry_cache == NULL )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "Cache initialization failed"
+            );
+        }
+
+        // Bulk initialize the arrays to NULL
+        memcpy(
+            ( void * ) _cache->event_table_work_item_entry_cache,
+            NULL,
+            sizeof( struct event_table_work_item_entry * )
+          * CACHE_MAX_LENGTH
+        );
+
+        memcpy(
+            ( void * ) _cache->action_entry_cache,
+            NULL,
+            sizeof( struct action_entry * )
+          * CACHE_MAX_LENGTH
+        );
+    }
+    else
+    {
+        // Re-initialize cache, assume this is triggered by SIGHUP
+        _cache = me->cache;
+        _wait_and_set_mutex( &(_cache->locked) );
+
+        // Begin clearing allocated entries.
+        // TODO: We can add some smarts by only purging stale entries
+        for( i = 0; i < _cache->n_action_entry; i++ )
+        {
+            j  = _cache->action_entry_map[i];
+            ae = _cache->action_entry_cache[j];
+
+            if( ae->query != NULL )
+            {
+                munmap( ( void * ) (ae->query), sizeof( char ) * ae->l_query );
+                ae->query   = NULL;
+                ae->l_query = 0;
+            }
+
+            if( ae->method != NULL )
+            {
+                munmap( ( void * ) (ae->method), sizeof( char ) * ae->l_method );
+                ae->method   = NULL;
+                ae->l_method = 0;
+            }
+
+            ae->use_ssl          = false;
+#ifdef ALLOW_BULK_AND_DEDUPE
+            ae->can_deduplicate  = false;
+            ae->can_bulk_execute = false;
+#endif // ALLOW_BULK_AND_DEDUPE
+            munmap( ae, sizeof( struct action_entry ) );
+            _cache->action_entry_cache[j] = NULL;
+        }
+
+        for( i = 0; i < _cache->n_event_table_work_item_entry; i++ )
+        {
+            j     = _cache->event_table_work_item_entry_map[i];
+            etwie = _cache->event_table_work_item_entry_cache[j];
+
+            if( etwie->transaction_label != NULL )
+            {
+                munmap( ( void * ) (etwie->transaction_label), sizeof( char ) * etwie->l_transaction_label );
+                etwie->transaction_label   = NULL;
+                etwie->l_transaction_label = 0;
+            }
+
+            if( etwie->work_item_query != NULL )
+            {
+                munmap( ( void * ) (etwie->work_item_query), sizeof( char ) * etwie->l_work_item_query );
+                etwie->work_item_query   = NULL;
+                etwie->l_work_item_query = 0;
+            }
+
+            etwie->action                 = 0;
+            etwie->use_ssl                = false;
+#ifdef ALLOW_BULK_AND_DEDUPE
+            etwie->can_bulk_execute       = false;
+            etwie->can_deduplicate        = false;
+#endif // ALLOW_BULK_AND_DEDUPE
+            etwie->execute_asynchronously = false;
+
+            munmap( etwie, sizeof( struct event_table_work_item_entry ) );
+            _cache->event_table_work_item_entry_cache[j] = NULL;
+        }
+
+        munmap(
+            ( void * ) (_cache->action_entry_map),
+            ( sizeof( unsigned int ) * _cache->_n_action_entry )
+        );
+
+        munmap(
+            ( void * ) (_cache->event_table_work_item_entry_map),
+            ( sizeof( unsigned int ) * _cache->_n_event_table_work_item_entry )
+        );
+
+        _cache->n_action_entry = 0;
+        _cache->n_event_table_work_item_entry = 0;
+    }
+
+    // Populate / Re-populate cache
+    //  - re-initialize entries - the cache array is a sparse array, the unsigned int * array is a LUT for all allocated entries.
+    //  - array is sparese so that the workers can look up by the action / event_table_work_item primary key rather than a linear search
+
+    // Populate event_table_work_item cache and LUT
+    result = _execute_query(
+        me,
+        ( char * ) get_event_table_work_item_cache,
+        NULL,
+        0
+    );
+
+    if( result == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Failed to cache event_table_work_items"
+        );
+    }
+
+    j = PQntuples( result );
+
+    if( j > CACHE_MAX_LENGTH )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Number of event_table_work_items exceeds CACHE_MAX_LENGTH %d, please increase and recompile",
+            CACHE_MAX_LENGTH
+        );
+    }
+
+    _cache->n_event_table_work_item_entry = j;
+    _cache->event_table_work_item_entry_map = ( unsigned int * ) create_shared_memory(
+        sizeof( unsigned int ) * j
+    );
+
+    if( _cache->event_table_work_item_entry_map == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Failed to allocate cache LUT for event_table_work_items"
+        );
+    }
+
+    for( i = 0; i < j; i++ )
+    {
+        errno = 0;
+        etwi = ( unsigned int ) strtoul(
+            get_column_value(
+                i,
+                result,
+                "event_table_work_item"
+            ),
+            NULL,
+            10
+        );
+
+        if( errno )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "Failure when converting %s to integer",
+                get_column_value( i, result, "event_table_work_item" )
+            );
+        }
+
+        if( etwi > CACHE_MAX_LENGTH )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "event_table_work_item sequence overruns bounds of cache LUT.\n\
+                - Please either extend CACHE_MAX_LENGTH and recompile or\n\
+                - Compact down the entries into a less sparse range of primary keys"
+            );
+        }
+
+        _cache->event_table_work_item_entry_map[i] = etwi;
+
+        etwie = ( struct event_table_work_item_entry * ) create_shared_memory(
+            sizeof( struct event_table_work_item_entry )
+        );
+
+        if( etwie == NULL )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "Failed to allocate ETWI cache entry %lu",
+                etwi
+            );
+        }
+
+        etwie->action                 = 0;
+        etwie->transaction_label      = NULL;
+        etwie->l_transaction_label    = 0;
+        etwie->work_item_query        = NULL;
+        etwie->l_work_item_query      = 0;
+#ifdef ALLOW_BULK_AND_DEDUPE
+        etwie->can_deduplicate        = false;
+        etwie->can_bulk_execute       = false;
+#endif // ALLOW_BULK_AND_DEDUPE
+        etwie->execute_asynchronously = false;
+
+        _cache->event_table_work_item_entry_cache[etwi] = etwie;
+        etwie->action = strtoul( get_column_value( i, result, "action" ), NULL, 10 );
+
+        if( !is_column_null( i, result, "transaction_label" ) )
+        {
+            etwie->l_transaction_label = strnlen( get_column_value( i, result, "transaction_label" ), ULONG_MAX );
+            etwie->transaction_label = ( char * ) create_shared_memory(
+                sizeof( char ) * etwie->l_transaction_label
+            )
+
+            if( etwie->transaction_label == NULL )
+            {
+                _log(
+                    LOG_LEVEL_FATAL,
+                    "failed to allocate cache entry for transaction_label at index %lu",
+                    etwi
+                );
+            }
+
+            strncpy( etwie->transaction_label, get_column_value( i, result, "transaction_label" ), etwie->l_transaction_label );
+        }
+
+        if( !is_column_null( i, result, "work_item_query" ) )
+        {
+            etwie->l_work_item_query = strnlen( get_column_value( i, result, "work_item_query" ), ULONG_MAX );
+            etwie->work_item_query = ( char * ) create_shared_memory(
+                sizeof( char ) * etwie->l_work_item_query
+            );
+
+            if( etwie->work_item_query == NULL )
+            {
+                _log(
+                    LOG_LEVEL_FATAL,
+                    "Failed to allocate cache entry for work_item_query at index %lu",
+                    etwi
+                );
+            }
+
+            strncpy( etwie->work_item_query, get_column_value( i, result, "work_item_query" ), etwie->l_work_item_query );
+        }
+
+#ifdef ALLOW_BULK_AND_DEDUPE
+        can_deduplicate = get_column_value( i, result, "can_deduplicate" );
+        can_bulk_execute = get_column_value( i, result, "can_bulk_execute" );
+
+        if(
+              strncmp( can_deduplicate, "t", 1 ) == 0
+           || strncmp( can_deduplicate, "T", 1 ) == 0
+           || strncmp( can_deduplicate, "1", 1 ) == 0
+          )
+        {
+            etwie->can_deduplicate = true;
+        }
+        else
+        {
+            etwie->can_deduplicate = false;
+        }
+
+        if(
+              strncmp( can_bulk_execute, "t", 1 ) == 0
+           || strncmp( can_bulk_execute, "T", 1 ) == 0
+           || strncmp( can_bulk_execute, "1", 1 ) == 0
+          )
+        {
+            etwie->can_bulk_execute = true;
+        }
+        else
+        {
+            etwie->can_bulk_execute = false;
+        }
+#endif // ALLOW_BULK_AND_DEDUPE
+
+        execute_asynchronously = get_column_value( i, result, "execute_asynchronously" );
+
+        if(
+              strncmp( execute_asynchronously, "t", 1 ) == 0
+           || strncmp( execute_asynchronously, "T", 1 ) == 0
+           || strncmp( execute_asynchronously, "1", 1 ) == 0
+          )
+        {
+            etwie->execute_asynchronously = true;
+        }
+        else
+        {
+            // Prolly don't even need to waste RAM caching this entry :/ TODO
+            etwie->execute_asynchronosuly = false;
+        }
+    }
+
+    PQclear( result );
+
+    // Populate action cache and LUT
+    result = _execute_query(
+        me,
+        ( char * ) get_action_cache,
+        NULL,
+        0
+    );
+
+    if( result == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Failed to cache actions"
+        );
+    }
+
+    j = PQntuples( result );
+
+    if( j > CACHE_MAX_LENGTH )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Number of actions exceeds CACHE_MAX_LENGTH %d, please increase and recompile",
+            CACHE_MAX_LENGTH
+        );
+    }
+
+    _cache->n_action_entry= j;
+    _cache->action_entry_map = ( unsigned int * ) create_shared_memory(
+        sizeof( unsigned int ) * j
+    );
+
+    if( _cache->action_entry_map == NULL )
+    {
+        _log(
+            LOG_LEVEL_FATAL,
+            "Failed to allocate cache LUT for actions"
+        );
+    }
+
+    for( i = 0; i < j; i++ )
+    {
+        errno = 0;
+        a = ( unsigned int ) strtoul(
+            get_column_value(
+                i,
+                result,
+                "action"
+            ),
+            NULL,
+            10
+        );
+
+        if( errno )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "Failure when converting %s to integer",
+                get_column_value( i, result, "action" )
+            );
+        }
+
+        if( a > CACHE_MAX_LENGTH )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "action sequence overruns bounds of cache LUT.\n\
+                - Please either extend CACHE_MAX_LENGTH and recompile or\n\
+                - Compact down the entries into a less sparse range of primary keys"
+            );
+        }
+
+        _cache->action_entry_map[i] = a;
+
+        ae = ( struct action_entry * ) create_shared_memory(
+            sizeof( struct action_entry )
+        );
+
+        if( ae == NULL )
+        {
+            _log(
+                LOG_LEVEL_FATAL,
+                "Failed to allocate action cache entry %lu",
+                a
+            );
+        }
+
+        ae->query            = NULL;
+        ae->l_query          = NULL;
+        ae->use_ssl          = false;
+        ae->method           = NULL;
+        ae->l_method         = 0;
+#ifdef ALLOW_BULK_AND_DEDUPE
+        ae->can_deduplicate  = false;
+        ae->can_bulk_execute = false;
+#endif // ALLOW_BULK_AND_DEDUPE
+
+        _cache->action_entry_cache[a] = ae;
+
+        if( !is_column_null( i, result, "query" ) )
+        {
+            ae->l_query = strnlen( get_column_value( i, result, "query" ), ULONG_MAX );
+            ae->query = ( char * ) create_shared_memory(
+                sizeof( char ) * ae->l_query
+            )
+
+            if( ae->query == NULL )
+            {
+                _log(
+                    LOG_LEVEL_FATAL,
+                    "failed to allocate cache entry for action query at index %lu",
+                    a
+                );
+            }
+
+            strncpy( ae->query, get_column_value( i, result, "query" ), ae->l_query );
+        }
+
+        if( !is_column_null( i, result, "method" ) )
+        {
+            ae->l_method = strnlen( get_column_value( i, result, "method", USHRT_MAX ) );
+            ae->method = ( char * ) create_shared_memory(
+                sizeof( char ) * ae->l_method
+            );
+
+            if( ae->method == NULL )
+            {
+                _log(
+                    LOG_LEVEL_FATAL,
+                    "Failed to allocate cache entry for method at index %lu",
+                    a
+                );
+            }
+
+            strncpy( etwie->work_item_query, get_column_value( i, result, "work_item_query" ), etwie->l_work_item_query );
+        }
+
+#ifdef ALLOW_BULK_AND_DEDUPE
+        can_deduplicate = get_column_value( i, result, "can_deduplicate" );
+        can_bulk_execute = get_column_value( i, result, "can_bulk_execute" );
+
+        if(
+              strncmp( can_deduplicate, "t", 1 ) == 0
+           || strncmp( can_deduplicate, "T", 1 ) == 0
+           || strncmp( can_deduplicate, "1", 1 ) == 0
+          )
+        {
+            etwie->can_deduplicate = true;
+        }
+        else
+        {
+            etwie->can_deduplicate = false;
+        }
+
+        if(
+              strncmp( can_bulk_execute, "t", 1 ) == 0
+           || strncmp( can_bulk_execute, "T", 1 ) == 0
+           || strncmp( can_bulk_execute, "1", 1 ) == 0
+          )
+        {
+            ae->can_bulk_execute = true;
+        }
+        else
+        {
+            ae->can_bulk_execute = false;
+        }
+#endif // ALLOW_BULK_AND_DEDUPE
+    }
+
+    PQclear( result );
+
+
+    _cache->locked = false;
+    return;
+}
+#endif // ALLOW_CACHE

@@ -3,7 +3,7 @@
  * event_manager--0.1.sql
  *     Event Manager extension schema for version 0.1
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        event_manager--0.1.sql

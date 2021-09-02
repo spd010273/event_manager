@@ -3,10 +3,10 @@
  * strings.h
  *     Static string declarations (Queries n' such)
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018-2021 MerchLogix Inc
  *
  * IDENTIFICATION
- *        strings.h
+ *        src/lib/strings.h
  *
  *------------------------------------------------------------------------
  */
@@ -14,6 +14,8 @@
 #ifndef STRINGS_H
 #define STRINGS_H
 #define EXTENSION_NAME "event_manager"
+#define MAX_DEQUEUE "25"
+#define MAX_RANGE "'0.5 seconds'::INTERVAL"
 
 /* Static Strings */
 static const char * user_agent = "\
@@ -27,6 +29,64 @@ INNER JOIN pg_catalog.pg_namespace n \
         ON n.oid = e.extnamespace \
      WHERE e.extname = $1 \
        AND e.extversion = $2";
+
+/*
+ * This and the work queue bulk dequeue work similarly -
+ * Perform a single dequeue, then append to that set other items of the same nature
+ * that occurred (temporally) within a small window of time, up to a limit.
+ */
+static const char * get_bulk_event_queue_item __attribute__((unused)) = "\
+WITH ct_bulk_dequeue AS \
+( \
+    WITH ct_peek AS \
+    ( \
+        SELECT eq.*, \
+               eq.ctid \
+          FROM " EXTENSION_NAME ".tb_event_queue eq \
+         WHERE eq.failed IS FALSE \
+           AND eq.execute_asynchronously IS TRUE \
+      ORDER BY eq.failed ASC, \
+               eq.recorded ASC \
+         LIMIT 1 \
+    FOR UPDATE OF eq SKIP LOCKED \
+    ), \
+    ct_batched_lock AS \
+    ( \
+        SELECT eq.*, \
+               eq.ctid \
+          FROM " EXTENSION_NAME ".tb_event_queue eq \
+    INNER JOIN ct_peek tt \
+            ON tt.event_table_work_item = eq.event_table_work_item \
+         WHERE eq.failed IS FALSE \
+           AND eq.execute_asynchronously IS TRUE \
+           AND eq.recorded >= tt.recorded \
+           AND eq.recorded < ( tt.recorded + COALESCE( $1::INTERVAL, " MAX_RANGE " ) ) \
+    FOR UPDATE OF eq SKIP LOCKED \
+         LIMIT COALESCE( $2::INTEGER - 1, " MAX_DEQUEUE " - 1 ) \
+    ) \
+        SELECT p.* \
+          FROM ct_peek p \
+         UNION ALL \
+        SELECT bl.* \
+          FROM ct_batched_lock bl \
+) \
+    SELECT eq.event_table_work_item, \
+           eq.uid, \
+           eq.recorded, \
+           eq.pk_value, \
+           eq.op, \
+           etwi.action, \
+           etwi.transaction_label, \
+           etwi.work_item_query, \
+           etwi.execute_asynchronously, \
+           etwi.can_deduplicate, \
+           eq.old, \
+           eq.new, \
+           eq.session_values, \
+           eq.ctid \
+      FROM ct_bulk_dequeue eq \
+INNER JOIN " EXTENSION_NAME ".tb_event_table_work_item etwi \
+        ON etwi.event_table_work_item = eq.event_table_work_item";
 
 static const char * get_event_queue_item = "\
 WITH ct_lock AS \
@@ -49,6 +109,8 @@ FOR UPDATE OF eq SKIP LOCKED \
            etwi.transaction_label, \
            etwi.work_item_query, \
            etwi.execute_asynchronously, \
+           etwi.can_deduplicate, \
+           etwi.can_bulk_execute, \
            eq.old, \
            eq.new, \
            eq.session_values, \
@@ -82,6 +144,65 @@ UPDATE " EXTENSION_NAME ".tb_event_queue eq \
    AND eq.session_values::TEXT IS NOT DISTINCT FROM $8::TEXT \
    AND eq.ctid = $9::TID";
 
+static const char * get_bulk_work_queue_item __attribute__((unused)) = "\
+WITH ct_bulk_dequeue AS \
+( \
+    WITH ct_peek AS \
+    ( \
+        SELECT wq.*, \
+               wq.ctid \
+          FROM " EXTENSION_NAME ".tb_work_queue wq \
+         WHERE NOT wq.failed \
+           AND wq.execute_asynchronously IS TRUE \
+      ORDER BY wq.failed ASC, \
+               wq.recorded ASC \
+    FOR UPDATE OF wq SKIP LOCKED \
+         LIMIT 1 \
+    ), \
+    ct_batched_lock AS \
+    ( \
+        SELECT wq.*, \
+               wq.ctid \
+          FROM " EXTENSION_NAME ".tb_work_queue wq \
+    INNER JOIN ct_peek tt \
+            ON tt.action = wq.action \
+         WHERE NOT wq.failed \
+           AND wq.recorded >= tt.recorded \
+           AND wq.recorded < ( tt.recorded + COALESCE( $1, " MAX_RANGE " ) ) \
+    FOR UPDATE OF wq SKIP LOCKED \
+         LIMIT COALESCE( $2 - 1, " MAX_DEQUEUE " - 1 ) \
+    ) \
+        SELECT p.* \
+          FROM ct_peek p \
+         UNION ALL \
+        SELECT bl.* \
+          FROM ct_batched_lock \
+) \
+    SELECT wq.parameters, \
+           a.static_parameters, \
+           regexp_replace( \
+               a.uri, \
+               '__BASE_URL__', \
+               COALESCE( \
+                   wq.session_values->>'" EXTENSION_NAME ".base_url', \
+                   current_setting( '" EXTENSION_NAME ".base_url', TRUE ), \
+                   'localhost' \
+               ) \
+           ) AS uri, \
+           COALESCE( a.method, 'GET' ) AS method, \
+           a.query, \
+           a.use_ssl, \
+           a.can_deduplicate, \
+           wq.uid, \
+           wq.recorded, \
+           wq.transaction_label, \
+           wq.action, \
+           wq.session_values, \
+           wq.ctid \
+      FROM ct_bulk_dequeue wq \
+INNER JOIN " EXTENSION_NAME ".tb_action a \
+        ON a.action = wq.action";
+
 static const char * get_work_queue_item = "\
     SELECT wq.parameters, \
            a.static_parameters, \
@@ -97,6 +218,8 @@ static const char * get_work_queue_item = "\
            COALESCE( a.method, 'GET' ) AS method, \
            a.query, \
            a.use_ssl, \
+           a.can_deduplicate, \
+           a.can_bulk_execute, \
            wq.uid, \
            wq.recorded, \
            wq.transaction_label, \
@@ -235,4 +358,25 @@ static const char * get_event_processor_count __attribute__((unused)) = "\
                '" EXTENSION_NAME ".override_event_process_count', \
                TRUE \
            ), '' )::INTEGER AS event_count";
+
+static const char * get_event_table_work_item_cache __attribute__((unused)) = "\
+    SELECT event_table_work_item, \
+           action, \
+           transaction_label, \
+           can_deduplicate, \
+           work_item_query, \
+           execute_asynchronously \
+      FROM " EXTENSION_NAME ".tb_event_table_work_item \
+  ORDER BY event_table_work_item";
+
+static const char * get_action_cache __attribute__((unused)) = "\
+    SELECT action, \
+           query, \
+           use_ssl, \
+           method, \
+           can_deduplicate, \
+           can_bulk_execute, \
+      FROM " EXTENSION_NAME ".tb_action \
+  ORDER BY action";
+
 #endif // STRINGS_H

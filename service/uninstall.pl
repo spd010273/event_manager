@@ -5,7 +5,7 @@
  * uninstall.pl
  *     Basic systemctl uninstaller for Event Manager
  *
- * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2018, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        uninstall.pl
