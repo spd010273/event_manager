@@ -56,7 +56,7 @@ endef
 export __VERSION_H_SOURCE
 
 event_manager: version.h src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o src/lib/em_shm.o
-	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o src/lib/em_shm.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl ${DEBUG}
+	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o src/lib/em_shm.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lrt -lm -lpq -lcurl ${DEBUG}
 
 version.h:
 	./tools/valid_version_check.pl

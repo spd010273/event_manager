@@ -1072,7 +1072,7 @@ void _update_stats(
     return;
 }
 
-bool _wait_and_set_mutex( bool * mutex )
+bool _wait_and_set_mutex( volatile bool * mutex )
 {
     time_t lock_acquire_start = 0;
     double random_backoff     = 0.0;
@@ -1119,7 +1119,7 @@ bool _wait_and_set_mutex( bool * mutex )
     return true;
 }
 
-bool __test_and_set( bool * mutex )
+bool __test_and_set( volatile bool * mutex )
 {
     bool initial = true;
     initial = *mutex;

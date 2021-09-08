@@ -6,7 +6,7 @@
  *     - System V (shm.h / ipc.h)
  *     - POSIX (mman.h)
  *     - mmap
- *     The goal of this library is to prevent a simplified
+ *     The goal of this library is to present a simplified
  *     malloc/calloc/free interface for shared memory allocation
  *
  * Copyright (c) 2021, MerchLogix Inc.
@@ -18,6 +18,444 @@
  */
 
 #include "em_shm.h"
+
+static ctrl_header * control_header    = NULL;
+static size_t        control_header_sz = 0;
+static shm_handle    control_handle    = ( shm_handle ) 0;
+static void *        sysv_private      = NULL;
+static bool          is_inited         = false;
+
+// TODO:
+//  - implement shm physical file load-in and cleanup in case of crashes or reboots
+//  - Add cleanup routine for program exits
+void shm_init( void )
+{
+    void *     ctrl_header_address = NULL;
+    size_t     ctrl_header_size    = 0;
+    shm_handle ctrl_handle         = 0;
+
+    /*
+     * This routine is expected to be called by the parent prior to children
+     * beginning to use shared memory. This is suggested as a simple and easy
+     * way to consistently initialize shared memory and accounting information.
+     * Things become much easier if this is done pre-fork
+     */
+
+    // May need to cleanup physical files here
+
+    ctrl_header_size = sizeof( ctrl_header );
+
+    while( ctrl_header_address == NULL && ctrl_header_size == 0 )
+    {
+        ctrl_handle = ( shm_handle ) random();
+
+        if( ctrl_handle == CTRL_HEADER_INVALID )
+            continue;
+
+        if(
+            shm_wrapper(
+                SHM_CREATE,
+                ctrl_handle,
+                ctrl_header_size,
+                &sysv_private,
+                ( void ** ) &ctrl_header_address,
+                ( size_t * ) &control_header_sz
+            )
+          )
+        {
+            break;
+        }
+    }
+
+    control_header = ctrl_header_address;
+    control_handle = ctrl_handle;
+
+    control_header->items       = NULL;
+    control_header->id          = ( uint32_t ) CTRL_HEADER_MAGIC;
+    control_header->entry_count = 0;
+    control_header->owner       = getpid();
+
+    is_inited = true;
+    return;
+}
+
+void shm_child_init( void )
+{
+    void *     ctrl_header_address = NULL;
+    size_t     ctrl_header_size    = 0;
+    void *     priv                = NULL;
+
+    if( !is_inited )
+    {
+        // Maybe handle the case where parent fork()'d then inited,
+        // We wont have the control handle so we'll have to search the disk
+        // for the header belonging to our getppid()
+        return;
+    }
+
+    if( control_handle == 0 || control_handle == CTRL_HEADER_INVALID )
+        return;
+
+    // Proceed expecing a valid init'd control header
+    if(
+          shm_wrapper(
+              SHM_ATTACH,
+              control_handle,
+              0,
+              &priv,
+              ( void ** ) &ctrl_header_address,
+              &ctrl_header_size
+          )
+      )
+    {
+        if( !shm_check_owner( ctrl_header_address ) )
+        {
+            fprintf(
+                stderr,
+                "shm_child_init: Bad control segment %lu is not valid or owned by us",
+                ( uint64_t ) control_handle
+            );
+            shm_wrapper(
+                SHM_DETACH,
+                control_handle,
+                0,
+                &priv,
+                ( void ** ) &ctrl_header_address,
+                &ctrl_header_size
+            );
+
+        }
+
+        return;
+    }
+
+    control_header    = ctrl_header_address;
+    control_header_sz = ctrl_header_size;
+}
+
+// Segment interface functions
+static void detach_segment( shm_segment * segment )
+{
+    if( segment == NULL )
+        return;
+
+    if( segment->mapped_address != NULL )
+    {
+        if(
+            shm_wrapper(
+                SHM_DETACH,
+                segment->handle,
+                0,
+                ( void ** ) &segment->priv,
+                ( void ** ) &segment->mapped_address,
+                ( size_t * ) &segment->mapped_size
+            )
+          )
+        {
+            // Segment is no longer in shm scope and just local allocation
+            segment->priv           = NULL;
+            segment->mapped_address = NULL;
+            segment->mapped_size    = 0;
+        }
+        else
+        {
+            fprintf(
+                stderr,
+                "Detach failed"
+            );
+            return;
+        }
+    }
+
+    // Decrement ref count
+    if( control->items[segment->ctrl_index].ref_count > 1 )
+    {
+        control->items[segment->ctrl_index].ref_count--;
+    }
+    else
+    {
+        //TODO Need to clean up this segment in SHM
+    }
+
+    _free_segment( segment );
+    return;
+}
+
+static shm_segment * attach_segment( shm_handle handle )
+{
+    shm_segment * segment = NULL;
+    uint32_t      i       = 0;
+
+    if( control_handle == CTRL_HEADER_INVALID )
+    {
+        fprintf(
+            stderr,
+            "Cannot attach a segment on an invalid control handle"
+        );
+        return NULL;
+    }
+
+    if( !is_inited )
+        shm_child_init();
+
+    segment = _new_segment();
+
+    if( segment == NULL )
+        return NULL;
+
+    _lock_acquire( &(control->locked) );
+
+    for( i = 0; i < control->entry_count; i++ )
+    {
+        if( control->items[i].handle != segment->handle )
+            continue;
+
+        if( control->items[i].ref_count <= 1 )
+            continue;
+
+        control->items[i].ref_count++;
+        segment->ctrl_index = i;
+    }
+
+    _lock_release( &(control->locked) );
+
+    if( segment->ctrl_index == INVALID_CONTROL_INDEX )
+    {
+        _free_segment( segment );
+        return NULL;
+    }
+
+    if(
+        shm_wrapper(
+            SHM_ATTACH,
+            segment->handle,
+            0,
+            ( void ** ) &segment->priv,
+            ( void ** ) &segment->mapped_address,
+            ( size_t * ) &segment->mapped_size
+        )
+      )
+    {
+        return segment;
+    }
+
+    _free_segment( segment );
+    return NULL;
+}
+
+static shm_segment * create_segment( size_t size )
+{
+    shm_segment * segment = NULL;
+    uint32_t      i       = 0;
+
+    if( control_handle == CTRL_HEADER_INVALID )
+    {
+        fprintf(
+            stderr,
+            "Cannot create a segment on an invalid control handle"
+        );
+        return NULL;
+    }
+
+    if( control->entry_count >= control->max_entries )
+    {
+        // Maybe figure out a way to extend the number of control slots
+        fprintf(
+            stderr,
+            "Out of slots in control segment"
+        );
+        return NULL;
+    }
+
+    segment = _new_segment();
+
+    if( segment == NULL )
+        return NULL;
+
+    while( segment->mapped_address == NULL && segment->mapped_size == 0 )
+    {
+        segment->handle = ( shm_handle ) random();
+        if( segment->handle == SEGMENT_HANDLE_INVALID )
+            continue;
+        if(
+              shm_wrapper(
+                  SHM_CREATE,
+                  segment->handle,
+                  size,
+                  ( void ** ) &(segment->priv),
+                  ( void ** ) &(segment->mapped_address),
+                  ( size_t * ) &(segment->mapped_size)
+              )
+           )
+        {
+            break;
+        }
+    }
+
+    // Get lock on control header to update arrays
+    _lock_acquire( &(control->locked) );
+
+    // Look for an unused slot
+    for( i = 0; i < control->entry_count; i++ )
+    {
+        if( control->items[i].ref_count == 0 )
+        {
+            control->items[i].ref_count = 2;
+            control->items[i].handle    = segment->handle;
+            control->items[i].priv      = NULL;
+            segment->ctrl_index         = i;
+            _lock_release( &(control->locked) );
+            return segment;
+        }
+    }
+
+    control->items[control->entry_count].handle    = segment->handle;
+    control->items[control->entry_count].ref_count = 2;
+    control->items[control->entry_count].priv      = NULL;
+    segment->ctrl_index                            = control->entry_count;
+    control->entry_count++;
+    _lock_release( &(control->locked) );
+    return segment;
+}
+
+static void _free_segment( shm_segment * segment )
+{
+    if( segment == NULL )
+        return;
+
+    if( segment->owner != getpid() )
+    {
+        fprintf(
+            stderr,
+            "Attempt to free segment not owned by local process. We are %d, segment owned by %d",
+            getpid(),
+            segment->owner
+        );
+        return;
+    }
+
+    if( control->items[segment->ctrl_index].ref_count > 1 )
+    {
+        control->items[segment->ctrl_index].ref_count--;
+    }
+    else
+    {
+        // Clean up the control slot and shm_item?
+    }
+
+    free( segment );
+    return;
+}
+
+static shm_segment * _new_segment( void )
+{
+    shm_segment * segment = NULL;
+
+    segment = ( shm_segment * ) calloc( sizeof( shm_segment ), 1 );
+
+    if( segment == NULL )
+    {
+        fprintf(
+            stderr,
+            "Failed to allocate shared memory segment"
+        );
+        return NULL;
+    }
+
+    segment->handle         = ( shm_handle ) SEGMENT_HANDLE_INVALID;
+    segment->owner          = getpid();
+    segment->ctrl_index     = INVALID_CONTROL_INDEX;
+    segment->mapped_size    = 0;
+    segment->mapped_address = NULL;
+    segment->priv           = NULL;
+    return segment;
+}
+
+
+// Segment sanity checking
+static bool shm_check_owner( ctrl_header * header )
+{
+    if( !shm_check_ctrl( header ) )
+        return false;
+    if( header->owner == getpid() || header->owner == getppid() )
+        return true;
+
+    return false;
+}
+
+static bool shm_check_ctrl( ctrl_header * header )
+{
+    if( header == NULL )
+        return false;
+    if( header->id != CTRL_HEADER_MAGIC )
+        return false;
+
+    return true;
+}
+
+static bool shm_check_ctrl_by_handle( shm_handle ctrl )
+{
+    // Given an arbitrary segment, attempt to locate the
+    // control header and determine if that's valid
+    // and owned by us or our parent
+    ctrl_header * header = NULL;
+    size_t        size   = 0;
+    void *        priv   = NULL;
+
+    if( ctrl == CTRL_HEADER_INVALID )
+        return false;
+
+    if(
+        shm_wrapper(
+            SHM_ATTACH,
+            ctrl,
+            0,
+            &priv,
+            ( void ** ) &header,
+            &size
+        )
+      )
+    {
+        if( !shm_check_owner( header ) )
+        {
+            shm_wrapper(
+                SHM_DETACH,
+                ctrl,
+                0,
+                &priv,
+                ( void ** ) &header,
+                &size
+            );
+
+            return false;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+static bool shm_check_seg( shm_item * item )
+{
+    if( item == NULL )
+        return false;
+    if( item->ctrl == CTRL_HEADER_INVALID )
+        return false;
+    if( !shm_check_ctrl_by_handle( item->ctrl ) )
+        return false;
+    return true;
+}
+
+static size_t get_ctrl_bytes_overhead( uint32_t count )
+{
+    uint64_t result = 0;
+
+    result = offsetof( ctrl_header, items )
+           + sizeof( shm_item ) * ( ( uint64_t ) count );
+
+    return ( size_t ) result;
+}
 
 // Allocator primitives
 #ifdef SHM_USE_POSIX
@@ -90,7 +528,7 @@ static bool shm_posix(
     {
         if( fstat( descriptor, &statbuff ) != 0 )
         {
-            _close_segment( descriptor, name, false );
+            _close_segment_descriptor( descriptor, name, false );
             fprintf(
                 stderr,
                 "Failed to stat shared memory segment %s: %s",
@@ -101,11 +539,22 @@ static bool shm_posix(
         }
 
         // Possibly handle size differences here
+        if( size != statbuff.st_size )
+        {
+            fprintf(
+                stderr,
+                "Mismatch is shared memory segment %s, loaded %zu, expected %zu",
+                name,
+                statbuff.st_size,
+                size
+            );
+        }
+
         size = statbuff.st_size;
     }
     else if( shm_posix_resize( descriptor, size ) != 0 )
     {
-        _close_segment( descriptor, name, false );
+        _close_segment_descriptor( descriptor, name, false );
         fprintf(
             stderr,
             "Failed to resize shared memory segment %s to %zu bytes: %s",
@@ -121,7 +570,7 @@ static bool shm_posix(
         NULL,
         size,
         PROT_READ | PROT_WRITE,
-        MAP_NOSYNC | MAP_SHARED | MAP_HASSEMAPHORE,
+        MAP_SHARED | MMAP_FLAGS,
         descriptor,
         0
     );
@@ -129,7 +578,7 @@ static bool shm_posix(
     if( address == MAP_FAILED )
     {
         save_errno = errno;
-        _close_segment( descriptor, name, false );
+        _close_segment_descriptor( descriptor, name, false );
 
         if( op == SHM_CREATE )
         {
@@ -151,7 +600,7 @@ static bool shm_posix(
     *mapped_address = ( void * ) address;
     *mapped_size    = size;
 
-    _close_segment( descriptor, name, false );
+    _close_segment_descriptor( descriptor, name, false );
 
     return true;
 }
@@ -201,7 +650,7 @@ static bool shm_sysv(
     char *          address          = NULL;
     char            name[64]         = {0};
     size_t          segment_size     = 0;
-    struct shmid_ds shm              = {0};
+    struct shmid_ds shm              = {{0}};
 
     snprintf( name, 64, "%lu", ( uint64_t ) handle );
 
@@ -277,7 +726,7 @@ static bool shm_sysv(
         identifier_cache = ( int * ) *private;
         identifier       = ( int ) *identifier_cache;
     }
-    
+
     if( op == SHM_DESTROY || op == SHM_DETACH )
     {
         // Clean up our previously or newly allocated ID cache
@@ -333,7 +782,7 @@ static bool shm_sysv(
             );
             return false;
         }
-        
+
         // handle size mismatch?
         size = shm.shm_segsz;
     }
@@ -386,7 +835,7 @@ static bool shm_mmap(
     snprintf(
         name,
         64,
-        "%s/%s%lu"
+        "%s/%s%lu",
         SHM_FILE_MMAP_DIR,
         SHM_FILE_MMAP_PREFIX,
         ( uint64_t ) handle
@@ -413,7 +862,7 @@ static bool shm_mmap(
         *mapped_address = NULL;
         *mapped_size    = 0;
 
-        if( op = SHM_DESTROY && unlink( name ) != 0 )
+        if( op == SHM_DESTROY && unlink( name ) != 0 )
         {
             fprintf(
                 stderr,
@@ -454,7 +903,7 @@ static bool shm_mmap(
     {
         if( fstat( descriptor, &statbuff ) != 0 )
         {
-            _close_segment( descriptor, name, false );
+            _close_segment_descriptor( descriptor, name, false );
 
             fprintf(
                 stderr,
@@ -464,18 +913,30 @@ static bool shm_mmap(
             );
             return false;
         }
-    
+
+        // Possibly handle size differences here
+        if( size != statbuff.st_size )
+        {
+            fprintf(
+                stderr,
+                "Mismatch is shared memory segment %s, loaded %zu, expected %zu",
+                name,
+                statbuff.st_size,
+                size
+            );
+        }
+
         size = statbuff.st_size;
     }
     else if( shm_mmap_resize( descriptor, size ) != 0 )
     {
-        _close_segment( descriptor, name, true );
+        _close_segment_descriptor( descriptor, name, true );
         fprintf(
             stderr,
             "Failed to resize shared memory segment %s to %zu bytes: %s",
             name,
             size,
-            strerror( errno );
+            strerror( errno )
         );
 
         return false;
@@ -485,7 +946,7 @@ static bool shm_mmap(
         NULL,
         size,
         PROT_READ | PROT_WRITE,
-        MAP_NOSYNC | MAP_SHARED | MAP_HASSEMAPHORE,
+        MAP_SHARED | MMAP_FLAGS,
         descriptor,
         0
     );
@@ -493,15 +954,15 @@ static bool shm_mmap(
     if( address == MAP_FAILED )
     {
         if( op == SHM_CREATE )
-            _close_segment( descriptor, name, true );
+            _close_segment_descriptor( descriptor, name, true );
         else
-            _close_segment( descriptor, name, false );
+            _close_segment_descriptor( descriptor, name, false );
 
         fprintf(
             stderr,
             "Could not map shared memory segment %s: %s",
             name,
-            strerror( errno );
+            strerror( errno )
         );
 
         return false;
@@ -510,7 +971,7 @@ static bool shm_mmap(
     *mapped_address = ( void * ) address;
     *mapped_size    = size;
 
-    if( !_close_segment( descriptor, name, false ) )
+    if( !_close_segment_descriptor( descriptor, name, false ) )
     {
         return false;
     }
@@ -525,7 +986,7 @@ static int shm_mmap_resize( int descriptor, size_t size )
     size_t      goal        = 0;
     size_t      written     = 0;
     bool        success     = false;
- 
+
     /*
      * Fill the file with zeros. We want to do this ahead of time to ensure
      * that the space has actually been allocated. In a similare vein to the
@@ -549,13 +1010,12 @@ static int shm_mmap_resize( int descriptor, size_t size )
 
         if( goal > ZERO_BUFFER_SIZE )
             goal = ZERO_BUFFER_SIZE;
-        
+        errno = 0;
         do {
             written = write( descriptor, zero_buffer, goal );
-            ret     = erno;
-        } while( ret == EINTR );
-        
-        if( written == goal ) 
+        } while( errno == EINTR );
+
+        if( written == goal )
             remaining -= goal;
         else
             success = false;
@@ -595,7 +1055,7 @@ static bool shm_wrapper(
 // End allocator primitives
 
 // Helper functions
-static bool _close_segment( int descriptor, char * name, bool do_unlink )
+static bool _close_segment_descriptor( int descriptor, char * name, bool do_unlink )
 {
     int  save_errno = 0;
 
@@ -632,4 +1092,55 @@ static bool _close_segment( int descriptor, char * name, bool do_unlink )
 
     errno = save_errno;
     return true;
+}
+
+static bool _lock_acquire( volatile bool * mutex )
+{
+    double random_backoff = 0.0;
+    double last_backoff   = 0.0;
+    double total_backoff  = 0.0;
+
+    if( mutex == NULL )
+        return false;
+
+    while( *mutex == true || __test_and_set( mutex ) == true )
+    {
+        if( total_backoff >= MAX_LOCK_WAIT )
+            return false;
+        sleep( last_backoff + random_backoff );
+        last_backoff    = last_backoff + random_backoff;
+        total_backoff  += last_backoff;
+        random_backoff  = 2 * ( ( double ) rand() / ( double ) RAND_MAX );
+    }
+
+    *mutex = true;
+    return true;
+}
+
+static bool _lock_release( volatile bool * mutex )
+{
+    if( mutex == NULL )
+        return false;
+
+    *mutex = false;
+    return true;
+}
+
+static bool __test_and_set( volatile bool * mutex )
+{
+    bool initial = true;
+    initial = *mutex;
+    *mutex = true;
+    return initial;
+}
+
+static size_t _get_system_page_size( void )
+{
+#ifdef __linux__
+    return sysconf( _SC_PAGESIZE );
+#endif // __linux__
+#if defined( __FreeBSD__ ) || defined( __APPLE__ ) || defined( __unix__ )
+    return ( size_t ) getpagesize();
+#endif // __FreeBSD__
+    return ( size_t ) DEFAULT_PAGE_SIZE;
 }

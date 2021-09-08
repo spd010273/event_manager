@@ -264,8 +264,8 @@ void _update_stats(
 );
 
 // Mutex helpers
-bool _wait_and_set_mutex( bool * );
-bool __test_and_set( bool * );
+bool _wait_and_set_mutex( volatile bool * );
+bool __test_and_set( volatile bool * );
 
 void _parent_handle_sighup( void );
 void _child_handle_sighup( void );
