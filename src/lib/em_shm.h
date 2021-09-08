@@ -94,13 +94,13 @@
 #define SHM_FILE_OCTAL 0600;
 
 // Public functions
-void shm_init( void );
-void shm_child_init( void );
+void shm_init( void ) __attribute__((unused));
+void shm_child_init( void ) __attribute__((unused));
 
-void * shm_alloc( size_t );
-void * shm_calloc( size_t );
-void * shm_realloc( void *, size_t );
-void shm_free( void * );
+void * shm_alloc( size_t ) __attribute__((unused));
+void * shm_calloc( size_t ) __attribute__((unused));
+void * shm_realloc( void *, size_t ) __attribute__((unused));
+void shm_free( void * ) __attribute__((unused));
 
 /*
  * The structs constitute book keeping information for shared memory segments.
@@ -144,8 +144,8 @@ typedef struct ctrl_header {
     pid_t      owner;
     uint32_t   entry_count;
     uint32_t   max_entries;
-    shm_item * items;
     bool       locked;
+    shm_item * items;
 } ctrl_header;
 
 // Global state
@@ -157,7 +157,7 @@ static bool          is_inited;
 
 static bool shm_check_ctrl( ctrl_header * );
 static bool shm_check_owner( ctrl_header * );
-static bool shm_check_seg( shm_item * );
+static bool shm_check_seg( shm_item * ) __attribute__((unused)); // Not needed?
 static bool shm_check_ctrl_by_handle( shm_handle );
 static size_t get_ctrl_bytes_overhead( uint32_t );
 
@@ -174,15 +174,15 @@ static int shm_mmap_resize( int, size_t );
 #endif //SHM_USE_MMAP
 
 static bool shm_wrapper( shm_op, shm_handle, size_t, void **, void **, size_t * ); // priv, mapped_address ( void ** )
-static shm_segment * create_segment( size_t );
-static shm_segment * attach_segment( shm_handle );
-static void detach_segment( shm_segment * );
+static shm_segment * create_segment( size_t ) __attribute__((unused));
+static shm_segment * attach_segment( shm_handle ) __attribute__((unused));
+static void detach_segment( shm_segment * ) __attribute__((unused));
 
 static shm_segment * _new_segment( void );
 static void _free_segment( shm_segment * );
 // Helper functions
 static bool _close_segment_descriptor( int, char *, bool );
-static size_t _get_system_page_size( void );
+static size_t _get_system_page_size( void ) __attribute__((unused)); // Use by allocator later, just roughed out for now;
 static bool _lock_acquire( volatile bool * );
 static bool _lock_release( volatile bool * );
 static bool __test_and_set( volatile bool * );

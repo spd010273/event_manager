@@ -42,8 +42,7 @@ void shm_init( void )
      */
 
     // May need to cleanup physical files here
-
-    ctrl_header_size = sizeof( ctrl_header );
+    ctrl_header_size = get_ctrl_bytes_overhead( ( uint32_t ) MAX_SEGMENTS );
 
     while( ctrl_header_address == NULL && ctrl_header_size == 0 )
     {
