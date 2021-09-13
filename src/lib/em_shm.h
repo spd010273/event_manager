@@ -75,6 +75,18 @@
 #define MAX_LOCK_WAIT 1
 #endif // MAX_LOCK_WAIT
 
+#ifdef __builtin_expect
+ #ifndef likely
+  #define likely(x) __builtin_expect( !!(x), 1 )
+ #endif // likely
+ #ifndef unlikely
+  #define unlikely(x) __builtin_expect( !!(x), 0 )
+ #endif // unlikely
+#else
+ #define likely(x) ( !!(x) )
+ #define unlikely(x) ( !!(x) )
+#endif // __builtin_expect
+
 // MMAP FLAGS
 // Handle possible missing defines
 #ifndef MAP_NOSYNC
@@ -93,12 +105,18 @@
 #define SHM_FILE_PERMS ( S_IWUSR | S_IRUSR )
 #define SHM_FILE_OCTAL 0600;
 
+#define SHMBLOCK_MAGIC       "42\0"
+#define BLOCKFLAG_SUPERBLOCK 0b01000000
+#define BLOCKFLAG_INUSE      0b00000010
+#define BLOCKFLAG_ISFREELIST 0b00001000
+#define BLOCKFLAG_INVALID    0b10100000
+
 // Public functions
 void shm_init( void ) __attribute__((unused));
 void shm_child_init( void ) __attribute__((unused));
 
 void * shm_alloc( size_t ) __attribute__((unused));
-void * shm_calloc( size_t ) __attribute__((unused));
+void * shm_calloc( size_t, uint32_t ) __attribute__((unused));
 void * shm_realloc( void *, size_t ) __attribute__((unused));
 void shm_free( void * ) __attribute__((unused));
 
@@ -121,12 +139,17 @@ typedef uint64_t shm_handle;
 // Given that the ctrl_header is initialized, we can recover the shm_item.
 typedef struct shm_segment {
     shm_handle  handle;
-    pid_t       owner;
     uint32_t    ctrl_index;
     void      * priv;
     void      * mapped_address;
     size_t      mapped_size;
 } shm_segment;
+
+// Local list of mapped segments in the same order as ctrl_header->items[]
+typedef struct shm_segment_map {
+    shm_segment * mapped_segments[MAX_SEGMENTS];
+    uint32_t      num_mapped;
+} shm_segment_map;
 
 // Shared-memory state for a given segment
 typedef struct shm_item {
@@ -134,9 +157,6 @@ typedef struct shm_item {
     shm_handle  ctrl;
     uint32_t    ref_count;
     bool        locked;
-    void *      mapped_address;
-    size_t      mapped_size;
-    void *      priv;
 } shm_item;
 
 typedef struct ctrl_header {
@@ -148,19 +168,42 @@ typedef struct ctrl_header {
     shm_item * items;
 } ctrl_header;
 
-// Global state
-static ctrl_header * control;
-static size_t        control_header_sz;
-static shm_handle    control_handle;
-static void *        sysv_private;
-static bool          is_inited;
+typedef struct shmblock {
+    char              _magic[3];
+    char              flags;
+    size_t            size; // Size of allocation, includes header
+    uint32_t          next; // Offset into the page for the next node
+} shmblock;
 
+typedef struct shm_superblock {
+    shmblock *     freelist_head;
+    shm_handle     list_head_segment;
+    uint32_t       list_head_offset;
+} shm_superblock;
+
+#define GET_USER_PTR(m) = ( ( void * ) m + sizeof( struct shmblock ) )
+#define GET_HDR_PTR(u)  = ( u == 0 ? 0 : ( ( void * ) u - sizeof( struct shmblock ) ) )
+
+#define GET_USER_SZ(m) = ( m == 0 ? 0 : m->size - sizeof( struct shmblock ) )
+#define GET_REAL_SZ(m) = ( m == 0 ? 0 : m->size );
+
+// Global state for control data
+static ctrl_header *     control_header;
+static size_t            control_header_sz;
+static shm_handle        control_handle;
+static void *            sysv_private;
+static bool              is_inited;
+static shm_segment_map * seg_map;
+
+// Check functions
 static bool shm_check_ctrl( ctrl_header * );
 static bool shm_check_owner( ctrl_header * );
 static bool shm_check_seg( shm_item * ) __attribute__((unused)); // Not needed?
 static bool shm_check_ctrl_by_handle( shm_handle );
+static bool is_local_state_good( void ); 
 static size_t get_ctrl_bytes_overhead( uint32_t );
 
+// SHM Mapping functions
 #ifdef SHM_USE_POSIX
 static bool shm_posix( shm_op, shm_handle, size_t, void **, size_t * );
 static int shm_posix_resize( int, size_t );
@@ -173,17 +216,22 @@ static bool shm_mmap( shm_op, shm_handle, size_t, void **, size_t * );
 static int shm_mmap_resize( int, size_t );
 #endif //SHM_USE_MMAP
 
+// SHM manipulation functions
 static bool shm_wrapper( shm_op, shm_handle, size_t, void **, void **, size_t * ); // priv, mapped_address ( void ** )
 static shm_segment * create_segment( size_t ) __attribute__((unused));
 static shm_segment * attach_segment( shm_handle ) __attribute__((unused));
 static void detach_segment( shm_segment * ) __attribute__((unused));
-
 static shm_segment * _new_segment( void );
 static void _free_segment( shm_segment * );
+
 // Helper functions
 static bool _close_segment_descriptor( int, char *, bool );
 static size_t _get_system_page_size( void ) __attribute__((unused)); // Use by allocator later, just roughed out for now;
 static bool _lock_acquire( volatile bool * );
 static bool _lock_release( volatile bool * );
 static bool __test_and_set( volatile bool * );
+static inline size_t _align( size_t ); //align an arbitrary size to a multiple of the system word size
+static void _map_all( void );
+static void _map_segment( shm_segment * );
+
 #endif // EM_SHM_H
