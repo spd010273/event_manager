@@ -32,7 +32,8 @@
 #define STAT_UPDATE_INTERVAL 60 // In seconds
 
 // In seconds, the longest time we can go without hearing from our parent process
-#define MAX_HEARTBEAT_DURATION 60
+#define MAX_HEARTBEAT_DURATION 60.0
+#define SELECT_TIMEOUT_SECONDS 5
 
 // Channels
 #define EVENT_QUEUE_CHANNEL "new_event_queue_item"

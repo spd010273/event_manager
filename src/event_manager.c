@@ -631,16 +631,18 @@ static bool _rollback_transaction( struct worker * me )
  */
 static void _queue_loop( struct worker * me )
 {
-    PGnotify * notify          = NULL;
-    char *     listen_command  = NULL;
+    PGnotify *     notify          = NULL;
+    char *         listen_command  = NULL;
 #ifdef ALLOW_QUEUE_CHECK_WITH_GUC
-    PGresult * qc_result       = NULL;
-    char *     disable_queue   = NULL;
-    bool       dq_bool_result  = false;
+    PGresult *     qc_result       = NULL;
+    char *         disable_queue   = NULL;
+    bool           dq_bool_result  = false;
 #endif // ALLOW_QUEUE_CHECK_WITH_GUC
-    PGresult * listen_result   = NULL;
-    int        processed_count = 0;
-    int        dequeue_result  = 0;
+    PGresult *     listen_result   = NULL;
+    int            processed_count = 0;
+    int            dequeue_result  = 0;
+    double         heartbeat_delta = 0.0;
+    struct timeval timeout         = {0};
 
     // Check queue prior to entering main loop
     _log(
@@ -749,7 +751,7 @@ static void _queue_loop( struct worker * me )
     }
 #endif // ALLOW_CONFIG_MANAGER
 
-    listen_command = ( char * ) calloc(
+    listen_command  = ( char * ) calloc(
         ( strlen( me->channel ) + 10 ),
         sizeof( char )
     );
@@ -793,6 +795,9 @@ static void _queue_loop( struct worker * me )
         int sock;
         fd_set input_mask;
 
+        // Set the timeout here - select() clears it if timeout is hit
+        timeout.tv_sec  = ( time_t ) SELECT_TIMEOUT_SECONDS;
+
         if( got_sigterm )
             __term();
 
@@ -815,8 +820,27 @@ static void _queue_loop( struct worker * me )
 #endif // ALLOW_OVERRIDE_WORKER_COUNTS
 
         // Parent is dead! Long live SystemD!
-        if( difftime( time( NULL ), me->last_heartbeat ) > MAX_HEARTBEAT_DURATION )
+        heartbeat_delta = difftime( time( NULL ), me->last_heartbeat );
+
+        if( heartbeat_delta > MAX_HEARTBEAT_DURATION )
+        {
+            _log(
+                LOG_LEVEL_ERROR,
+                "Haven't heard from parent in %f seconds, exiting...",
+                heartbeat_delta
+            );
             __term();
+        }
+#ifdef DEBUG
+        else
+        {
+            _log(
+                LOG_LEVEL_DEBUG,
+                "Last heartbeat was %f seconds ago",
+                heartbeat_delta
+            );
+        }
+#endif // DEBUG
 
 #ifdef BLOCKING_SELECT
         sigaddset( &signal_set, SIGTERM );
@@ -834,7 +858,8 @@ static void _queue_loop( struct worker * me )
 #ifdef BLOCKING_SELECT
         sigprocmask( SIG_BLOCK, &signal_set, NULL );
 #endif // BLOCKING_SELECT
-        if( select( sock + 1, &input_mask, NULL, NULL, NULL ) < 0 )
+        // Note: from select(2) - hitting the timeout can return 0
+        if( select( sock + 1, &input_mask, NULL, NULL, &timeout ) < 0 )
         {
 #ifdef BLOCKING_SELECT
             sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
