@@ -63,11 +63,11 @@ version.h:
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 
 buildcheck:
-	$(info ************ Executing Test Harness with Valgrind ************)
+	$(info *************** Executing Test Harness with Valgrind **************)
 	./run_tests -M -D -V
 
 installcheck:
-	$(info ************ Executing Test Harness ************)
+	$(info ********************* Executing Test Harness **********************)
 	./run_tests -M -D
 
 include $(PGXS)

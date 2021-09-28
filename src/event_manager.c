@@ -797,6 +797,7 @@ static void _queue_loop( struct worker * me )
 
         // Set the timeout here - select() clears it if timeout is hit
         timeout.tv_sec  = ( time_t ) SELECT_TIMEOUT_SECONDS;
+        timeout.tv_usec = ( suseconds_t ) 0;
 
         if( got_sigterm )
             __term();
@@ -831,16 +832,6 @@ static void _queue_loop( struct worker * me )
             );
             __term();
         }
-#ifdef DEBUG
-        else
-        {
-            _log(
-                LOG_LEVEL_DEBUG,
-                "Last heartbeat was %f seconds ago",
-                heartbeat_delta
-            );
-        }
-#endif // DEBUG
 
 #ifdef BLOCKING_SELECT
         sigaddset( &signal_set, SIGTERM );
