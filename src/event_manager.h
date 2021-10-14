@@ -120,6 +120,7 @@ static void _get_child_counts_from_db( void );
 #endif // ALLOW_OVERRIDE_WORKER_COUNTS
 // Integration functions
 static void _cyanaudit_integration( struct worker *, char * );
+static bool parent_get_advisory_lock( void );
 
 // Program Entry
 int main( int, char ** );

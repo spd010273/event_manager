@@ -2643,12 +2643,6 @@ int main( int argc, char ** argv )
         PQclear( result );
     }
 
-    if( parent->conn != NULL )
-    {
-        PQfinish( parent->conn );
-        parent->conn = NULL;
-    }
-
     // Entry for other subs here
     // Spawn
     _log(
@@ -3687,6 +3681,11 @@ static bool _get_advisory_lock( struct worker * me )
         params[0] = "event_manager.tb_setting";
     }
 #endif // ALLOW_CONFIG_MANAGER
+    else if( me->type == WORKER_TYPE_PARENT )
+    {
+        parent_get_advisory_lock();
+        return true;
+    }
     else
     {
         return true;
@@ -3744,4 +3743,56 @@ static bool _get_advisory_lock( struct worker * me )
 
     PQclear( result );
     return false;
+}
+
+static bool parent_get_advisory_lock( void )
+{
+    struct worker * me           = NULL;
+    PGresult *      result       = NULL;
+    char *          lock_result  = NULL;
+
+    me = get_worker_by_pid();
+
+    if( me == NULL )
+        return false;
+
+    result = PQexecParams(
+        me->conn,
+        get_event_manager_running,
+        0,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        0
+    );
+
+    if(
+            result != NULL
+        && !(
+                PQresultStatus( result ) == PGRES_COMMAND_OK
+             || PQresultStatus( result ) == PGRES_TUPLES_OK
+            )
+      )
+    {
+        if( result != NULL )
+        {
+            PQclear( result );
+        }
+
+        _log( LOG_LEVEL_FATAL, "Failed to get parent's advisory lock: %s", PQerrorMessage( me->conn ) );
+    }
+
+    lock_result = get_column_value( 0, result, "result" );
+
+    if( strncmp( lock_result, "t", 1 ) == 0 || strncmp( lock_result, "T", 1 ) == 0 )
+    {
+        PQclear( result );
+        return true;
+    }
+
+    PQclear( result );
+
+    _log( LOG_LEVEL_FATAL, "There appears to be another instance of event_manager running on this database" );
+    __term();
 }

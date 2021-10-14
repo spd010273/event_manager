@@ -212,6 +212,11 @@ static const char * pid_lock = "\
                $2::INTEGER \
            ) AS result";
 
+static const char * get_event_manager_running = "\
+    SELECT pg_try_advisory_lock( \
+               '" EXTENSION_NAME ".tb_event_table_work_item'::REGCLASS::OID::BIGINT \
+           ) AS result";
+
 // Gated later with version flag for v0.2, attribute is just for suppression
 // of unused variable with -Weverything or -Wunused-variable
 static const char * check_event_queue_guc __attribute__((unused)) = "\
