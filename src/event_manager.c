@@ -145,6 +145,9 @@ static PGresult * _execute_query(
         "Connection OK"
     );
 
+    if( me->type == WORKER_TYPE_PARENT )
+        _get_advisory_lock( me );
+
     while(
              (
                  last_sql_state == NULL // No state (first pass)
@@ -217,6 +220,9 @@ static PGresult * _execute_query(
             {
                 me->tx_in_progress = false;
             }
+
+            if( me->conn != NULL )
+                PQfinish( me->conn );
 
             me->conn = NULL;
             db_connect( me );
@@ -369,11 +375,13 @@ static bool db_connect( struct worker * me )
     {
         if( PQstatus( me->conn ) != CONNECTION_OK )
         {
+            PQfinish( me->conn );
             me->conn           = NULL;
             me->tx_in_progress = false;
         }
         else
         {
+            _get_advisory_lock( me ); // It doesn't hurt to keep getting advisory locks
             return true;
         }
     }
@@ -389,6 +397,9 @@ static bool db_connect( struct worker * me )
         sleep( last_backoff_time );
         last_backoff_time = (unsigned int) ( 10 * ( ( double ) rand() / ( double ) RAND_MAX ) )
                           + last_backoff_time;
+        if( me->conn != NULL )
+            PQfinish( me->conn );
+
         me->conn = NULL;
         me->conn = PQconnectdb( conninfo );
         retry_counter++;
@@ -641,6 +652,7 @@ static void _queue_loop( struct worker * me )
     PGresult *     listen_result   = NULL;
     int            processed_count = 0;
     int            dequeue_result  = 0;
+    int            select_rv       = 0;
     double         heartbeat_delta = 0.0;
     struct timeval timeout         = {0};
 
@@ -814,8 +826,13 @@ static void _queue_loop( struct worker * me )
         // See if we've been pruned
         if( me->commanded_shutdown )
             __term();
-
-        // check for updated workers[] pointer
+        /*
+           check for updated workers[] pointer
+           Note this is really sensitive to SIGSEGV - do not dynamically
+           allocate the workers[] array without a better shm implementation
+           - otherwise newly allocated and shared ram will be out of scope
+           for processes post fork.
+        */
         if( me->commanded_refresh )
             _child_update_pointers();
 #endif // ALLOW_OVERRIDE_WORKER_COUNTS
@@ -850,8 +867,12 @@ static void _queue_loop( struct worker * me )
         sigprocmask( SIG_BLOCK, &signal_set, NULL );
 #endif // BLOCKING_SELECT
         // Note: from select(2) - hitting the timeout can return 0
-        if( select( sock + 1, &input_mask, NULL, NULL, &timeout ) < 0 )
-        {
+        // Also, we cannot examine the timeout struct post run - it should
+        // be treated as undefined due to various kernel implementations
+        select_rv = select( sock + 1, &input_mask, NULL, NULL, &timeout );
+
+        if( select_rv < 0 )
+        { // ERROR STATE
 #ifdef BLOCKING_SELECT
             sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 #endif // BLOCKING_SELECT
@@ -870,6 +891,26 @@ static void _queue_loop( struct worker * me )
                 return;
             }
         }
+
+        if( select_rv == 0 )
+        { // TIMEOUT STATE
+            // Timout reached or got a notify with no descriptor change
+            // the latter /shouldnt/ happen
+#ifdef BLOCKING_SELECT
+            sigprocmask( SIGUNBLOCK, &signal_set, NULL );
+#endif // BLOCKING_SELECT
+
+            if( got_sighup )
+            {
+                _child_handle_sighup();
+                return;
+            }
+
+            continue;
+        }
+        
+        // NORMAL STATE
+        select_rv = 0;
 #ifdef BLOCKING_SELECT
         sigprocmask( SIG_UNBLOCK, &signal_set, NULL );
 #endif // BLOCKING_SELECT
@@ -881,7 +922,13 @@ static void _queue_loop( struct worker * me )
         {
             _log(
                 LOG_LEVEL_DEBUG,
-                "Handling notify"
+                "(%s) Handling notify",
+                me->type == WORKER_TYPE_WORK_PROCESSOR ? "work queue" :
+                me->type == WORKER_TYPE_EVENT_PROCESSOR ? "event queue" :
+#ifdef ALLOW_CONFIG_MANAGER
+                me->type == WORKER_TYPE_CONFIG_MANAGER ? "config" :
+#endif // ALLOW_CONFIG_MANAGER
+                "INVALID"
             );
 
             PQconsumeInput( me->conn );
@@ -2908,10 +2955,7 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
            )
       )
     {
-        if( me->conn == NULL )
-        {
-            db_connect( me );
-        }
+        db_connect( me );
 
         snprintf( tx_success_buff, 64, "%u", stats[0]->tx_success );
         snprintf( tx_fail_buff, 64, "%u", stats[0]->tx_fail );
@@ -2930,12 +2974,6 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
 
         if( stat_update == NULL )
         {
-            if( me->conn != NULL )
-            {
-                PQfinish( me->conn );
-                me->conn = NULL;
-            }
-
             _log(
                 LOG_LEVEL_DEBUG,
                 "Failed to update event processor stats"
@@ -2959,10 +2997,7 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
            )
       )
     {
-        if( me->conn == NULL )
-        {
-            db_connect( me );
-        }
+        db_connect( me );
 
         snprintf( tx_success_buff, 64, "%u", stats[1]->tx_success );
         snprintf( tx_fail_buff, 64, "%u", stats[1]->tx_fail );
@@ -2981,12 +3016,6 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
 
         if( stat_update == NULL )
         {
-            if( me->conn != NULL )
-            {
-                PQfinish( me->conn );
-                me->conn = NULL;
-            }
-
             _log(
                 LOG_LEVEL_DEBUG,
                 "Failed to update work processor stats"
@@ -2999,12 +3028,6 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
         PQclear( stat_update );
     }
 
-    if( me->conn != NULL )
-    {
-        PQfinish( me->conn );
-    }
-
-    me->conn = NULL;
     _log(
         LOG_LEVEL_DEBUG,
         "Stats updated"
@@ -3751,9 +3774,13 @@ static bool parent_get_advisory_lock( void )
     PGresult *      result       = NULL;
     char *          lock_result  = NULL;
 
+    _log( LOG_LEVEL_DEBUG, "PARENT ATTEMPTING TO GET ADVISORY LOCK" );
     me = get_worker_by_pid();
 
     if( me == NULL )
+        return false;
+
+    if( me->type != WORKER_TYPE_PARENT )
         return false;
 
     result = PQexecParams(
@@ -3781,6 +3808,7 @@ static bool parent_get_advisory_lock( void )
         }
 
         _log( LOG_LEVEL_FATAL, "Failed to get parent's advisory lock: %s", PQerrorMessage( me->conn ) );
+        return false;
     }
 
     lock_result = get_column_value( 0, result, "result" );
@@ -3788,6 +3816,7 @@ static bool parent_get_advisory_lock( void )
     if( strncmp( lock_result, "t", 1 ) == 0 || strncmp( lock_result, "T", 1 ) == 0 )
     {
         PQclear( result );
+        _log( LOG_LEVEL_DEBUG, "Parent (re)acquired advisory lock" );
         return true;
     }
 

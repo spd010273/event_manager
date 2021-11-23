@@ -1969,7 +1969,7 @@ void _manage_children( void (*function)( void * ) )
             _parent_handle_sighup();
         }
 
-        _log( LOG_LEVEL_DEBUG, "Checking TID %d of workers %p", tid, workers );
+        _log( LOG_LEVEL_DEBUG, "Checking TID %d of workers %p (%p)", tid, workers, workers[tid] );
         if( workers[tid] == NULL )
         {
             _log(
