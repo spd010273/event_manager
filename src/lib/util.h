@@ -75,8 +75,8 @@
 
 #define LOG_FILE_NAME "/var/log/event_manager/event_manager.log"
 
-#define MAX(x,y) x>y ? x : y
-#define MIN(x,y) x<y ? x : y
+#define MAX(x,y) ( x>y ? x : y )
+#define MIN(x,y) ( x<y ? x : y )
 
 /*
  *  Structure used to store worker initialization at fork time,

@@ -10,9 +10,12 @@
  *
  *------------------------------------------------------------------------
  */
-
-// Compile with -DDEBUG to get debug messages
-
+/*
+ * Compile with -DC_DEBUG to get C language specific debugging messages
+ * Compile with -DEVENT_DEBUG to get SQL/REST specific debugging messages
+ * Either of these flags will turn on the -DDEBUG flag for generic debugging
+ *  messages
+ */
 /* Includes */
 #include "event_manager.h"
 
@@ -68,10 +71,12 @@ static PGresult * _execute_query(
             _log( LOG_LEVEL_ERROR, "Failed to reconnect" );
             return NULL;
         }
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "Process %d reconnected to DB", getpid() );
+#endif // C_DEBUG
     }
 
-#ifdef DEBUG
+#ifdef EVENT_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Executing query: '%s':",
@@ -86,7 +91,7 @@ static PGresult * _execute_query(
             _log( LOG_LEVEL_DEBUG, "%d (bindpoint $%d): %s", i, i+1, params[i] );
         }
     }
-#endif // DEBUG
+#endif // EVENT_DEBUG
     // Attempt to execute the query on our handle
     while(
             PQstatus( me->conn ) != CONNECTION_OK &&
@@ -111,13 +116,13 @@ static PGresult * _execute_query(
             "Failed to connect to DB server (%s). Retrying...",
             PQerrorMessage( me->conn )
         );
-
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Conninfo is: %s",
             conninfo
         );
-
+#endif // C_DEBUG
         retry_counter++;
         // Randomly increment the backoff counter to prevent constant polling
         // of a database that may be in recovery
@@ -126,12 +131,13 @@ static PGresult * _execute_query(
 
         if( me->conn != NULL )
         {
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Backoff time is %d",
                 last_backoff_time
             );
-
+#endif // C_DEBUG
             PQfinish( me->conn );
             me->conn = NULL;
         }
@@ -140,11 +146,20 @@ static PGresult * _execute_query(
         db_connect( me );
     }
 
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Connection OK"
     );
-
+#endif // C_DEBUG
+    /*
+     * Parent process may hold a connection open, but idle, for long periods
+     * So we re-acquire the advisory lock every chance we get. This is
+     * important to prevent automated tools ( upstart, ansible, etc )
+     * from thrashing the system to death with event_manager. This lockout
+     * ensures only one instance of event_manager can run against a given
+     * database.
+     */
     if( me->type == WORKER_TYPE_PARENT )
         _get_advisory_lock( me );
 
@@ -185,9 +200,11 @@ static PGresult * _execute_query(
           && retry_counter < MAX_CONN_RETRIES
          )
     {
-        /* Handle case where we passed the first connection check but the connection
-         * was interrupted mid-transaction. In this case, our transaction is aborted
-         * but we still want to re-establish a connection
+        /*
+         * Handle case where we passed the first connection check but the
+         * connection was interrupted mid-transaction. In this case, our
+         * transaction is aborted but we still want to re-establish a
+         * connection
          */
         if(
                last_sql_state != NULL
@@ -681,7 +698,9 @@ static void _queue_loop( struct worker * me )
 #ifdef ALLOW_QUEUE_CHECK_WITH_GUC
         if( me->type == WORKER_TYPE_WORK_PROCESSOR )
         {
+#ifdef C_DEBUG
             _log( LOG_LEVEL_DEBUG, "WORK processor checking queue GUC" );
+#endif // C_DEBUG
             qc_result = _execute_query(
                 me,
                 ( char * ) check_work_queue_guc,
@@ -691,7 +710,9 @@ static void _queue_loop( struct worker * me )
         }
         else if( me->type == WORKER_TYPE_EVENT_PROCESSOR )
         {
+#ifdef C_DEBUG
             _log( LOG_LEVEL_DEBUG, "EVENT processor checking queue GUC" );
+#endif // C_DEBUG
             qc_result = _execute_query(
                 me,
                 ( char * ) check_event_queue_guc,
@@ -714,6 +735,7 @@ static void _queue_loop( struct worker * me )
                 dq_bool_result = true;
             }
 
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Queue for %s is %s (raw result %s)",
@@ -725,7 +747,7 @@ static void _queue_loop( struct worker * me )
                 dq_bool_result ? "DISABLED" : "ENABLED",
                 disable_queue
             );
-
+#endif // C_DEBUG
             PQclear( qc_result );
             disable_queue = NULL;
         }
@@ -908,7 +930,7 @@ static void _queue_loop( struct worker * me )
 
             continue;
         }
-        
+
         // NORMAL STATE
         select_rv = 0;
 #ifdef BLOCKING_SELECT
@@ -916,8 +938,6 @@ static void _queue_loop( struct worker * me )
 #endif // BLOCKING_SELECT
         errno = 0;
 
-        // We will get dumped here on SIGHUP, and need to re-enter the
-        // _queue_loop function to re-establish all handles
         if( me->conn != NULL )
         {
             _log(
@@ -935,6 +955,7 @@ static void _queue_loop( struct worker * me )
 
             while( ( notify = PQnotifies( me->conn ) ) != NULL )
             {
+#ifdef C_DEBUG
                 _log(
                     LOG_LEVEL_DEBUG,
                     "ASYNCHRONOUS NOTIFY of '%s' received from "
@@ -943,7 +964,7 @@ static void _queue_loop( struct worker * me )
                     notify->be_pid,
                     notify->extra
                 );
-
+#endif // C_DEBUG
                 // Get queue item
                 PQfreemem( notify );
 
@@ -957,13 +978,13 @@ static void _queue_loop( struct worker * me )
                         return;
                     }
                 }
-
+#ifdef DEBUG
                 _log(
                     LOG_LEVEL_DEBUG,
                     "Processed %d queue entries",
                     processed_count
                 );
-
+#endif // DEBUG
                 processed_count = 0;
             }
 
@@ -973,7 +994,9 @@ static void _queue_loop( struct worker * me )
                     LOG_LEVEL_ERROR,
                     "Exiting after receiving SIGTERM"
                 );
+#ifdef C_DEBUG
                 _log( LOG_LEVEL_DEBUG, "Child %d breaking loop after SIGTERM", getpid() );
+#endif // C_DEBUG
                 __term();
             }
 
@@ -1086,11 +1109,12 @@ static int event_queue_handler( struct worker * me )
         // This is not useful, especially with > 1 worker on the queue, as all
         // workers receive the notify but only one wins the dequeue race.
         // This is especially egregious when the queue is empty
+#ifdef DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Event queue processor received spurious NOTIFY"
         );
-
+#endif // DEBUG
         _rollback_transaction( me );
         PQclear( result );
 
@@ -1140,10 +1164,10 @@ static int event_queue_handler( struct worker * me )
         return -1;
     }
 
-#ifdef DEBUG
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "WORK ITEM QUERY: " );
     _debug_struct( work_item_query_obj );
-#endif // DEBUG
+#endif // C_DEBUG
 
     work_item_result = _execute_query(
         me,
@@ -1184,10 +1208,12 @@ static int event_queue_handler( struct worker * me )
 
             if( update_result != NULL && _commit_transaction( me ) )
             {
+#ifdef EVENT_DEBUG
                 _log(
                     LOG_LEVEL_DEBUG,
                     "Successfully marked event item as failed"
                 );
+#endif // EVENT_DEBUG
             }
             else
             {
@@ -1326,12 +1352,12 @@ static int work_queue_handler( struct worker * me )
     int                   row_count     = 0;
     char *                params[7]     = {NULL};
     register unsigned int i             = 0;
-
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "handling work queue item"
     );
-
+#endif // C_DEBUG
     /* Start transaction */
     if( !_begin_transaction( me ) )
     {
@@ -1387,11 +1413,6 @@ static int work_queue_handler( struct worker * me )
         params[6] = get_column_value( i, result, "ctid" );
 
         /* Get detailed information about action, get parameter list */
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Executing action"
-        );
-
         action_result = execute_action( me, result, i );
 
         if( action_result == false )
@@ -1409,10 +1430,12 @@ static int work_queue_handler( struct worker * me )
 
                 if( update_result != NULL && _commit_transaction( me ) )
                 {
+#ifdef EVENT_DEBUG
                     _log(
                         LOG_LEVEL_DEBUG,
                         "Marked work queue item as failed"
                     );
+#endif // EVENT_DEBUG
                 }
                 else
                 {
@@ -1495,13 +1518,14 @@ static int work_queue_handler( struct worker * me )
 static int _config_manager_loop( struct worker * me )
 {
     // Validation boilerplate, make sure the right process in in this sub
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Config manager handling remote SIGHUP with pid %d, data %p",
         getpid(),
         me
     );
-
+#endif // C_DEBUG
     if( me == NULL )
     {
         _log(
@@ -1664,12 +1688,13 @@ static size_t _curl_write_callback(
 
     response_page->size += real_size;
     response_page->pointer[response_page->size] = 0;
-
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Writer callback called, resized response buffer to: %lu",
         real_size
     );
+#endif // C_DEBUG
     return real_size;
 }
 
@@ -1888,20 +1913,25 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
     //Get: CURLOPT_HTTPGET
     //Post: CURLOPT_POST
     //Put: CURLOPT_PUT
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Curl is enabled, setting method to %s",
         action->method
     );
-
+#endif // C_DEBUG
     if( strncmp( action->method, "GET", MIN( method_len, 3 ) ) == 0 )
     {
+#ifdef DEBUG
         _log( LOG_LEVEL_DEBUG, "Setting GET method" );
+#endif // DEBUG
         response = curl_easy_setopt( me->curl_handle, CURLOPT_HTTPGET, 1L );
     }
     else if( strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0 )
     {
+#ifdef DEBUG
         _log( LOG_LEVEL_DEBUG, "Setting PUT method" );
+#endif // DEBUG
         // CURLOPT_PUT is deprecated
         // TODO: Set the Content-type appropriately and the server ///should/// accept
         // POSTFIELDS for a PUT as per REST standard, but libcurl has deparecated
@@ -1914,7 +1944,9 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
     }
     else if( strncmp( action->method, "POST", MIN( method_len, 4 ) ) == 0 )
     {
+#ifdef DEBUG
         _log( LOG_LEVEL_DEBUG, "Setting POST method" );
+#endif // DEBUG
         response = curl_easy_setopt( me->curl_handle, CURLOPT_POST, 1L );
     }
     else
@@ -1967,8 +1999,6 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
        || strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0
       )
     {
-        _log( LOG_LEVEL_DEBUG, "Setting URL to remote_call" );
-
         remote_call = ( char * ) calloc(
             ( strlen( action->uri ) + strlen( param_list ) + 1 ),
             sizeof( char )
@@ -1991,12 +2021,6 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
 
         strncpy( remote_call, action->uri, strlen( action->uri ) );
         strncat( remote_call, param_list, strlen( param_list ) );
-
-        _log(
-            LOG_LEVEL_DEBUG,
-            "Making remote call to URI: %s",
-            remote_call
-        );
     }
     else
     {
@@ -2041,18 +2065,21 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         return false;
     }
 
+#ifdef DEBUG
     _log(
         LOG_LEVEL_DEBUG,
-        "Making %s call with param list %s",
+        "Making %s call to %s (%s)",
         action->method,
+        remote_call,
         param_list
     );
-
+#endif // DEBUG
     HTTP_RETRY:
 
     response = curl_easy_perform( me->curl_handle );
+#ifdef EVENT_DEBUG
     _log( LOG_LEVEL_DEBUG, "Call finished, parsing response" );
-
+#endif // EVENT_DEBUG
     if( param_list != NULL )
     {
         free( param_list );
@@ -2064,9 +2091,9 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         CURLINFO_RESPONSE_CODE,
         &response_code
     );
-
+#ifdef EVENT_DEBUG
     _log( LOG_LEVEL_DEBUG, "Got HTTP %d", (int) response_code );
-
+#endif // EVENT_DEBUG
     if( response != CURLE_OK )
     {
         _log(
@@ -2085,7 +2112,7 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
              && retry_count < TIMEOUT_RETRY_LIMIT
           )
         {
-            _log( LOG_LEVEL_DEBUG, "Request failed with timeout, retrying..." );
+            _log( LOG_LEVEL_WARNING, "Request failed with timeout, retrying..." );
             sleep( RETRY_BACKOFF );
             retry_count++;
             goto HTTP_RETRY;
@@ -2142,12 +2169,13 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
         return false;
     }
 
+#ifdef EVENT_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Got response: '%s'",
         write_buffer.pointer
     );
-
+#endif // EVENT_DEBUG
     if( retry_count > 0 )
     {
         _log(
@@ -2214,9 +2242,9 @@ static bool execute_action_query( struct worker * me, struct action_result * act
     _add_parameter_to_query( action_query, "uid",                action->uid               );
     _add_parameter_to_query( action_query, "recorded",           action->recorded          );
     _add_parameter_to_query( action_query,  "transaction_label", action->transaction_label );
-
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "PARAMS: %s", action->parameters );
-
+#endif // C_DEBUG
     _add_json_parameter_to_query( action_query, action->parameters,        ( char * ) NULL );
     _add_json_parameter_to_query( action_query, action->static_parameters, ( char * ) NULL );
     _add_json_parameter_to_query( action_query, action->session_values,    ( char * ) NULL );
@@ -2236,16 +2264,10 @@ static bool execute_action_query( struct worker * me, struct action_result * act
     }
 
     // Execute query_copy
-    _log(
-        LOG_LEVEL_DEBUG,
-        "Output query is: '%s'",
-        action_query->query_string
-    );
-
-#ifdef DEBUG
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "ACTION QUERY: " );
     _debug_struct( action_query );
-#endif // DEBUG
+#endif // C_DEBUG
 
     action_result = _execute_query(
         me,
@@ -2342,11 +2364,12 @@ static bool execute_action( struct worker * me, PGresult * result, int row )
     // Determine if action is query or URI based, send to correct handler
     if( is_column_null( 0, result, "query" ) == false )
     {
+#ifdef EVENT_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Executing action query"
         );
-
+#endif // EVENT_DEBUG
         execute_action_result = execute_action_query( me, action_ptr );
 
         if( execute_action_result == true && cyanaudit_installed == true )
@@ -2356,11 +2379,12 @@ static bool execute_action( struct worker * me, PGresult * result, int row )
     }
     else if( is_column_null( 0, result, "uri" ) == false )
     {
+#ifdef EVENT_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Executing API call"
         );
-
+#endif // EVENT_DEBUG
         execute_action_result = execute_remote_uri_call( me, action_ptr );
     }
     else
@@ -2692,6 +2716,7 @@ int main( int argc, char ** argv )
 
     // Entry for other subs here
     // Spawn
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Spawning %d workers (E: %d, W: %d)",
@@ -2699,10 +2724,12 @@ int main( int argc, char ** argv )
         event_jobs,
         work_jobs
     );
-
+#endif // C_DEBUG
     for( tid = 0; tid < event_jobs; tid++ )
     {
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "EL: %d", tid );
+#endif // C_DEBUG
         new_worker(
             WORKER_TYPE_EVENT_PROCESSOR,
             tid,
@@ -2715,7 +2742,9 @@ int main( int argc, char ** argv )
 
     for( tid = event_jobs; tid < ( work_jobs + event_jobs ); tid++ )
     {
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "WL: %d", tid );
+#endif // C_DEBUG
         new_worker(
             WORKER_TYPE_WORK_PROCESSOR,
             tid,
@@ -2727,7 +2756,9 @@ int main( int argc, char ** argv )
     }
 
 #ifdef ALLOW_CONFIG_MANAGER
+ #ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "Starting config manager" );
+ #endif // C_DEBUG
     new_worker(
         WORKER_TYPE_CONFIG_MANAGER,
         0,
@@ -2739,7 +2770,7 @@ int main( int argc, char ** argv )
 #endif // ALLOW_CONFIG_MANAGER
 
     last_stat_update = time( NULL );
-
+    _log( LOG_LEVEL_INFO, "All workers started." );
     while( 1 )
     {
         // Main loop for parent
@@ -2751,7 +2782,9 @@ int main( int argc, char ** argv )
                 ) > STAT_UPDATE_INTERVAL
           )
         {
+#ifdef C_DEBUG
             _log( LOG_LEVEL_DEBUG, "Updating stats..." );
+#endif // C_DEBUG
             _gather_and_update_stats( parent, stats );
             last_stat_update = time( NULL );
         }
@@ -2830,19 +2863,24 @@ static void _get_child_counts_from_db()
 
             if( temp > 0 )
                 override_work_jobs = temp;
+#ifdef C_DEBUG
             else
                 _log( LOG_LEVEL_DEBUG, "invalid count %d", temp );
+#endif // C_DEBUG
         }
+#ifdef C_DEBUG
         else
         {
             _log( LOG_LEVEL_DEBUG, "NULL response for WC" );
         }
+#endif // C_DEBUG
     }
+#ifdef C_DEBUG
     else
     {
         _log( LOG_LEVEL_DEBUG, "Getting override work count got 0 rows" );
     }
-
+#endif // C_DEBUG
     PQclear( worker_count_result );
 
     worker_count_result = _execute_query(
@@ -2875,19 +2913,24 @@ static void _get_child_counts_from_db()
 
             if( temp > 0 )
                 override_event_jobs = temp;
+#ifdef C_DEBUG
             else
                 _log( LOG_LEVEL_DEBUG, "invalid count %d", temp );
+#endif // C_DEBUG
         }
+#ifdef C_DEBUG
         else
         {
             _log( LOG_LEVEL_DEBUG, "NULL response for WC" );
         }
+#endif // C_DEBUG
     }
+#ifdef C_DEBUG
     else
     {
         _log( LOG_LEVEL_DEBUG, "Getting override event count got 0 rows" );
     }
-
+#endif // C_DEBUG
     PQclear( worker_count_result );
     PQfinish( me->conn );
     me->conn = NULL;
@@ -2975,7 +3018,7 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
         if( stat_update == NULL )
         {
             _log(
-                LOG_LEVEL_DEBUG,
+                LOG_LEVEL_WARNING,
                 "Failed to update event processor stats"
             );
 
@@ -3017,7 +3060,7 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
         if( stat_update == NULL )
         {
             _log(
-                LOG_LEVEL_DEBUG,
+                LOG_LEVEL_WARNING,
                 "Failed to update work processor stats"
             );
             return;
@@ -3028,11 +3071,12 @@ static void _gather_and_update_stats( struct worker * me, struct em_stat ** stat
         PQclear( stat_update );
     }
 
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Stats updated"
     );
-
+#endif // C_DEBUG
     return;
 }
 
@@ -3223,14 +3267,14 @@ static void set_session_gucs( struct worker * me, char * session_gucs )
         }
 
         PQclear( result );
-
+#ifdef DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Found session_guc kv pair: %s:%s",
             key,
             value
         );
-
+#endif // DEBUG
         free( key );
 
         if( value != NULL )
@@ -3360,12 +3404,13 @@ static void clear_session_gucs( struct worker * me, char * session_gucs )
         i = i + 2;
 
         params[0] = key;
+#ifdef DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Clearing GUC %s",
             key
         );
-
+#endif // DEBUG
         result = _execute_query(
             me,
             ( char * ) clear_guc,
@@ -3417,9 +3462,9 @@ static void _queue_loop_wrapper( void * data )
 {
     struct worker * me        = NULL;
     PGresult *      conn_test = NULL;
-
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "Pid %d got data %p", getpid(), data );
-
+#endif // C_DEBUG
     if( data == NULL )
     {
         _log(
@@ -3522,7 +3567,7 @@ static void _queue_loop_wrapper( void * data )
         {
             db_connect( me );
         }
-
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Child (type %s) entering main loop",
@@ -3530,12 +3575,14 @@ static void _queue_loop_wrapper( void * data )
                 me->type == WORKER_TYPE_PARENT ? "PARENT" :
                 me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
                 me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
-#ifdef ALLOW_CONFIG_MANAGER
+ #ifdef ALLOW_CONFIG_MANAGER
                 me->type == WORKER_TYPE_CONFIG_MANAGER ? "CONFIG" :
-#endif // ALLOW_CONFIG_MANAGER
+ #endif // ALLOW_CONFIG_MANAGER
                 "Unknown"
         );
+#endif // C_DEBUG
         _queue_loop( me );
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Child (type %s) escaped from main loop",
@@ -3543,11 +3590,12 @@ static void _queue_loop_wrapper( void * data )
                 me->type == WORKER_TYPE_PARENT ? "PARENT" :
                 me->type == WORKER_TYPE_WORK_PROCESSOR ? "WORK" :
                 me->type == WORKER_TYPE_EVENT_PROCESSOR ? "EVENT" :
-#ifdef ALLOW_CONFIG_MANAGER
+ #ifdef ALLOW_CONFIG_MANAGER
                 me->type == WORKER_TYPE_CONFIG_MANAGER ? "CONFIG" :
-#endif // ALLOW_CONFIG_MANAGER
+ #endif // ALLOW_CONFIG_MANAGER
                 "Unknown"
         );
+#endif // C_DEBUG
 
         if( single_step_only )
         {
@@ -3774,7 +3822,6 @@ static bool parent_get_advisory_lock( void )
     PGresult *      result       = NULL;
     char *          lock_result  = NULL;
 
-    _log( LOG_LEVEL_DEBUG, "PARENT ATTEMPTING TO GET ADVISORY LOCK" );
     me = get_worker_by_pid();
 
     if( me == NULL )
@@ -3816,12 +3863,17 @@ static bool parent_get_advisory_lock( void )
     if( strncmp( lock_result, "t", 1 ) == 0 || strncmp( lock_result, "T", 1 ) == 0 )
     {
         PQclear( result );
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "Parent (re)acquired advisory lock" );
+#endif // C_DEBUG
         return true;
     }
 
     PQclear( result );
 
-    _log( LOG_LEVEL_FATAL, "There appears to be another instance of event_manager running on this database" );
+    _log(
+        LOG_LEVEL_FATAL,
+        "There appears to be another instance of event_manager running on this database. Exiting..."
+    );
     __term();
 }

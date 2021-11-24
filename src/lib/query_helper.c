@@ -398,7 +398,9 @@ void _add_parameter_to_query(
 
         if( matches[0].rm_so == -1 || reg_result == REG_NOMATCH )
         {
+#ifdef EVENT_DEBUG
             _log( LOG_LEVEL_DEBUG, "No match for key '%s'", bindpoint_search );
+#endif // EVENT_DEBUG
             break;
         }
         else if( reg_result != 0 )
@@ -415,9 +417,9 @@ void _add_parameter_to_query(
 
             return;
         }
-
+#ifdef EVENT_DEBUG
         _log( LOG_LEVEL_DEBUG, "Found match for key '%s'", bindpoint_search );
-
+#endif // EVENT_DEBUG
         bind_counter++;
 
         bind_length = matches[0].rm_eo - matches[0].rm_so;
@@ -591,13 +593,15 @@ void _add_json_parameter_to_query(
 
     if( json_string == NULL )
     {
+#ifdef EVENT_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Nothing to bind"
         );
+#endif // EVENT_DEBUG
         return;
     }
-
+#ifdef EVENT_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Adding JSON parameters to query\n"\
@@ -605,7 +609,7 @@ void _add_json_parameter_to_query(
         json_string,
         key_prefix
     );
-
+#endif // EVENT_DEBUG
     if( query_obj == NULL )
     {
         _log(
@@ -662,13 +666,14 @@ void _add_json_parameter_to_query(
             key_value_pair->value
         );
 
+#ifdef EVENT_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Potentially bound KV: %s,%s",
             key_value_pair->key,
             key_value_pair->value
         );
-
+#endif // EVENT_DEBUG
         _free_json_kv( key_value_pair );
         key_value_pair = NULL;
     }
@@ -690,13 +695,14 @@ void _add_json_parameter_to_query(
 void _debug_struct( struct query * obj )
 {
     int i = 0;
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "Query object: " );
     _log( LOG_LEVEL_DEBUG, "==============" );
     _log( LOG_LEVEL_DEBUG, "query_string: '%s'", obj->query_string );
     _log( LOG_LEVEL_DEBUG, "length: %d", obj->length );
     _log( LOG_LEVEL_DEBUG, "_bind_count: %d", obj->_bind_count );
     _log( LOG_LEVEL_DEBUG, "_bind_list: " );
-
+#endif // C_DEBUG
     for( i = 0; i < obj->_bind_count; i++ )
     {
         _log( LOG_LEVEL_DEBUG, "%d: '%s'", i, obj->_bind_list[i] );
@@ -803,7 +809,9 @@ char * _add_json_parameters_to_param_list(
 
     if( json_string == NULL )
     {
+#ifdef EVENT_DEBUG
         _log( LOG_LEVEL_DEBUG, "Nothing to bind" );
+#endif // EVENT_DEBUG
         return param_list;
     }
 
@@ -906,8 +914,9 @@ char * _add_json_parameters_to_param_list(
         );
 
         param_list[*malloc_size - 1] = '\0';
-
+#ifdef EVENT_DEBUG
         _log( LOG_LEVEL_DEBUG, "My key_value_pair->Value: '%s'", key_value_pair->value );
+#endif // EVENT_DEBUG
         encoded_value = curl_easy_escape(
             curl_handle,
             ( const char * ) key_value_pair->value,
@@ -1265,7 +1274,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
 
         free( bindpoint_search );
         regfree( &regex );
-
+#ifdef EVENT_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Potentially bound KV %s,%s to %s",
@@ -1273,7 +1282,7 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
             temp_value,
             (*uri)
         );
-
+#endif // EVENT_DEBUG
         _free_json_kv( key_value_pair );
     }
 
@@ -1390,8 +1399,9 @@ static struct json_kv * get_next_json_kv_pair(
         }
 
         i = 1;
-
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "Parsing JSON '%s'", json_string );
+#endif // C_DEBUG
     }
     else
     {
@@ -1627,16 +1637,19 @@ static struct json_kv * new_kv_pair(
       )
     {
         end_index = json_value_token->end;
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "JSON Iterator: Performing nested struct lookahead to index %d",
             end_index
         );
+#endif // C_DEBUG
         // i has already been inremented to point to the next token
         // (the token that follows json_value_token in json_tokens[])
         for( j = (*i); j < (*max_tokens); j++ )
         {
             temp_token = json_tokens[j];
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "JSON Iterator: token T: %d, S: %d E: %d size: %d",
@@ -1645,7 +1658,7 @@ static struct json_kv * new_kv_pair(
                 temp_token.end,
                 temp_token.size
             );
-
+#endif // C_DEBUG
             if( temp_token.start >= end_index )
             {
                 (*i) = j;

@@ -94,15 +94,9 @@ void _parse_args( int argc, char ** argv )
                 exit( 0 );
             case 'E':
                 event_job_count = optarg;
-#ifdef DEBUG
-                _log( LOG_LEVEL_DEBUG, "Got EJ: %s", event_job_count );
-#endif // DEBUG
                 break;
             case 'W':
                 work_job_count = optarg;
-#ifdef DEBUG
-                _log( LOG_LEVEL_DEBUG, "Got WJ: %s", work_job_count );
-#endif // DEBUG
                 break;
             case 'S':
                 single_step_only = true;
@@ -223,13 +217,13 @@ void _parse_args( int argc, char ** argv )
     strncat( conninfo, dbname, strlen( dbname ) );
     conninfo[len - 1] = '\0';
 
-#ifdef DEBUG
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Parsed args: %s",
         conninfo
     );
-#endif // DEBUG
+#endif // C_DEBUG
 
     return;
 }
@@ -663,11 +657,13 @@ the current user\n",
     strncat( pid_path, pid_file, strlen( pid_file ) );
     pid_path[total_size - 1] = '\0';
 
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Opening pid file at %s",
         pid_path
     );
+#endif // C_DEBUG
 
     // Does our PID file exist (we're already running)
     if( stat( pid_path, &statbuffer ) >= 0 )
@@ -701,8 +697,9 @@ the current user\n",
     }
 
     snprintf( my_pid, total_size, "%d\n", ( int ) getpid()  );
-
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "my_pid: %s", my_pid );
+#endif // C_DEBUG
     pfh = fopen( pid_path, "w" );
 
     if( pfh == NULL )
@@ -854,7 +851,7 @@ struct worker * new_worker(
             size = ( work_jobs + event_jobs ) * sizeof( struct worker * );
 #endif // ALLOW_OVERRIDE_WORKER_COUNTS
 
-#ifdef DEBUG
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Creating SHM with size %lu: WJ %d, EJ: %d",
@@ -862,7 +859,7 @@ struct worker * new_worker(
                 work_jobs,
                 event_jobs
             );
-#endif // DEBUG
+#endif // C_DEBUG
             workers = ( struct worker ** ) create_shared_memory( size );
 
             if( workers == NULL )
@@ -872,12 +869,12 @@ struct worker * new_worker(
                     "Could not allocate child process table"
                 );
             }
-
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "PID table allocated at %p", workers
             );
-
+#endif // C_DEBUG
 #ifdef ALLOW_OVERRIDE_WORKER_COUNTS
             for( tid = 0; tid < MAX_WORKERS; tid++ )
 #else
@@ -890,9 +887,9 @@ struct worker * new_worker(
 
         result->my_argv = argv;
         result->my_argc = argc;
-#ifdef DEBUG
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "Parent argv: %p argc: %d", argv, argc );
-#endif // DEBUG
+#endif // C_DEBUG
         // Register signal handlers
         _register_signal_handlers();
         return result;
@@ -907,7 +904,9 @@ struct worker * new_worker(
     else
     {
 #endif // ALLOW_CONFIG_MANAGER
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "Remapped PID table slot %u to %p", id, result );
+#endif // C_DEBUG
     workers[id] = result;
 #ifdef ALLOW_CONFIG_MANAGER
     }
@@ -927,11 +926,11 @@ struct worker * new_worker(
             worker->my_argv = argv;
         }
 
-#ifdef DEBUG
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "child argv: %p argc: %d", argv, argc );
         _log( LOG_LEVEL_DEBUG, "Post fork, got data %p", data );
         _debug_worker_slot( worker );
-#endif // DEBUG
+#endif // C_DEBUG
 
         _set_process_title(
             argv,
@@ -1145,10 +1144,9 @@ void __sigterm( int sig )
     // TODO, verify that all processes receive this, and that the children cleanup, and the parent reaps
     got_sigterm = true;
     _log(
-        LOG_LEVEL_DEBUG,
+        LOG_LEVEL_INFO,
         "Got SIGTERM. Completing current transaction..."
     );
-
     __term();
 }
 
@@ -1218,10 +1216,9 @@ void __sigint( int sig )
 {
     got_sigint = true;
     _log(
-        LOG_LEVEL_DEBUG,
+        LOG_LEVEL_INFO,
         "Got SIGINT, Completing current transaction..."
     );
-
     __term();
 }
 
@@ -1246,25 +1243,28 @@ void __term( void )
     if( me == NULL )
     {
         // Could not find PID entry, just exit
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "No PID table entry for %d", getpid()
         );
-
+#endif // C_DEBUG
         exit(0);
     }
 
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "__term() invoked for PID %d", getpid() );
+#endif // C_DEBUG
     if( me->type != WORKER_TYPE_PARENT )
     {
         // just exit, let parent cleanup
         me = get_worker_by_pid();
-
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Child %d exiting", getpid()
         );
-
+#endif // C_DEBUG
         if( me == NULL )
         {
             exit(0);
@@ -1450,13 +1450,13 @@ void * create_shared_memory( size_t size )
 
     int protection = PROT_READ | PROT_WRITE;
     int visibility = MAP_ANONYMOUS | MAP_SHARED;
-
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Attempting to map shared memory of size %lu",
         size
     );
-
+#endif // C_DEBUG
     ptr = mmap( NULL, size, protection, visibility, 0, 0 );
 
     if( ptr == MAP_FAILED )
@@ -1497,7 +1497,10 @@ void _resize_pid_table( void (*function)( void * ) )
     bool             flag_ptr_refresh = false;
 
     me = get_worker_by_pid();
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "_resize_pid_table entry" );
+#endif // C_DEBUG
+
     if( me == NULL || me->type != WORKER_TYPE_PARENT )
     {
         _log( LOG_LEVEL_WARNING, "Illegal entry into _resize_pid_table" );
@@ -1532,6 +1535,7 @@ void _resize_pid_table( void (*function)( void * ) )
         target_event_cnt  = event_jobs;
     }
 
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "\nREMAP OF PID TABLE COMMANDED\n" \
@@ -1542,6 +1546,7 @@ void _resize_pid_table( void (*function)( void * ) )
         event_jobs,
         target_event_cnt
     );
+#endif // C_DEBUG
 
     if( new_worker_total > MAX_WORKERS )
     {
@@ -1564,6 +1569,7 @@ void _resize_pid_table( void (*function)( void * ) )
             sizeof( struct worker * )
         );
 
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "\nPID table resize occuring\n"\
@@ -1574,6 +1580,7 @@ void _resize_pid_table( void (*function)( void * ) )
             temp,
             new_worker_total
         );
+#endif // C_DEBUG
 
         if( temp == NULL )
         {
@@ -1590,16 +1597,20 @@ void _resize_pid_table( void (*function)( void * ) )
     }
     else
     {
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Reusing old PID table as it's the correct size"
         );
+#endif // C_DEBUG
     }
 
     // PRUNE STAGE
     if( w_delta < 0 || e_delta < 0 )
     {
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "Entering prune stage, WD %d, ED %d", w_delta, e_delta );
+#endif // C_DEBUG
         delta_array = ( struct worker ** ) calloc(
             abs( w_delta ) + abs( e_delta ),
             sizeof( struct worker * )
@@ -1659,14 +1670,17 @@ void _resize_pid_table( void (*function)( void * ) )
                     dead_worker_ind[delta_ind]      = tid;
                     temp_worker->commanded_shutdown = true;
                     delta_ind++;
+#ifdef C_DEBUG
                     _log(
                         LOG_LEVEL_DEBUG,
                         "event processor %d has been selected for termination",
                         temp_worker->pid
                     );
+#endif // C_DEBUG
                 }
                 else
                 {
+#ifdef C_DEBUG
                     _log(
                         LOG_LEVEL_DEBUG,
                         "event processor (%d) workers[%d] remaped to temp[%d]",
@@ -1674,6 +1688,7 @@ void _resize_pid_table( void (*function)( void * ) )
                         tid,
                         t_index
                     );
+#endif // C_DEBUG
                     temp[t_index] = temp_worker;
                     t_index++;
                 }
@@ -1688,14 +1703,17 @@ void _resize_pid_table( void (*function)( void * ) )
                     dead_worker_ind[delta_ind]      = tid;
                     temp_worker->commanded_shutdown = true;
                     delta_ind++;
+#ifdef C_DEBUG
                     _log(
                         LOG_LEVEL_DEBUG,
                         "work processor %d has been selected for termination",
                         temp_worker->pid
                     );
+#endif // C_DEBUG
                 }
                 else
                 {
+#ifdef C_DEBUG
                     _log(
                         LOG_LEVEL_DEBUG,
                         "work processor (%d) workers[%d] remaped to temp[%d]",
@@ -1703,41 +1721,51 @@ void _resize_pid_table( void (*function)( void * ) )
                         tid,
                         t_index
                     );
+#endif // C_DEBUG
                     temp[t_index] = temp_worker;
                     t_index++;
                 }
             }
         }
-
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "shutting down %d workers",
             delta_ind
         );
-
+#endif // C_DEBUG
         for( tid = 0; tid < delta_ind; tid++ )
         {
             temp_worker = delta_array[tid];
             while( !((delta_array[tid])->status == STATUS_DEAD ) )
             {
-                _log( LOG_LEVEL_DEBUG, "parent waiting for %d to exit (status %d)...", temp_worker->pid, (delta_array[tid])->status );
+#ifdef C_DEBUG
+                _log(
+                    LOG_LEVEL_DEBUG,
+                    "parent waiting for %d to exit (status %d)...",
+                    temp_worker->pid,
+                    (delta_array[tid])->status
+                );
+#endif // C_DEBUG
                 sleep( 1 );
                 temp_worker->commanded_shutdown = true;
                 kill( temp_worker->pid, SIGHUP );
             }
-
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Child %d has shutdown",
                 (delta_array[tid])->pid
             );
+#endif // C_DEBUG
         }
 
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "All delta workers shutdown"
         );
-
+#endif // C_DEBUG
         for( tid = 0; tid < delta_ind; tid++ )
         {
             temp_worker = workers[dead_worker_ind[tid]];
@@ -1745,10 +1773,12 @@ void _resize_pid_table( void (*function)( void * ) )
             munmap( temp_worker, sizeof( struct worker ) );
         }
 
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Dead worker PID table entries pruned"
         );
+#endif // C_DEBUG
         free( dead_worker_ind );
         free( delta_array );
     }
@@ -1757,6 +1787,7 @@ void _resize_pid_table( void (*function)( void * ) )
         // temp is larger, remap into temp
         for( tid = 0; tid < ( work_jobs + event_jobs ); tid++ )
         {
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Remapped worker %d workers[%d] to temp[%d]",
@@ -1764,6 +1795,7 @@ void _resize_pid_table( void (*function)( void * ) )
                 tid,
                 t_index
             );
+#endif // C_DEBUG
             temp[t_index] = workers[tid];
             t_index++;
         }
@@ -1789,21 +1821,24 @@ void _resize_pid_table( void (*function)( void * ) )
 
             if( temp_worker == NULL )
             {
+#ifdef C_DEBUG
                 _log(
                     LOG_LEVEL_ERROR,
                     "Spawning new work queue worker for PID table index %d failed",
                     t_index
                 );
+#endif // C_DEBUG
                 return;
             }
 
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Spawned new work queue worker (%d) at temp[%d]",
                 temp_worker->pid,
                 t_index
             );
-
+#endif // C_DEBUG
             temp[t_index] = temp_worker;
             t_index++;
         }
@@ -1824,21 +1859,24 @@ void _resize_pid_table( void (*function)( void * ) )
 
             if( temp_worker == NULL )
             {
+#ifdef C_DEBUG
                 _log(
                     LOG_LEVEL_ERROR,
                     "Spawning new event queue worker for PID table index %d failed",
                     t_index
                 );
+#endif // C_DEBUG
                 return;
             }
 
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Spawned new event queue worker (%d) at temp[%d]",
                 temp_worker->pid,
                 t_index
             );
-
+#endif // C_DEBUG
             temp[t_index] = temp_worker;
             t_index++;
         }
@@ -1857,24 +1895,29 @@ void _resize_pid_table( void (*function)( void * ) )
             temp_worker = workers[tid];
             if( temp_worker == NULL )
                 continue;
-
+#ifdef C_DEBUG
             _log( LOG_LEVEL_DEBUG, "Entering pointer reload state for %d", temp_worker->pid );
+#endif // C_DEBUG
             temp_worker->new_event_jobs    = target_event_cnt;
             temp_worker->new_work_jobs     = target_work_cnt;
             temp_worker->status            = STATUS_REFRESH;
             temp_worker->commanded_refresh = true;
-
+#ifdef C_DEBUG
             _log( LOG_LEVEL_DEBUG, "Entering wait state for %d reload", temp_worker->pid );
+#endif // C_DEBUG
             // Indicates it has loaded new ptrs and discarded old pid table entry
             while( !( (old_workers[tid])->status == STATUS_WORKING ) )
             {
+#ifdef C_DEBUG
                 _log( LOG_LEVEL_DEBUG, "Parent waiting for worker %d to reload", temp_worker->pid );
+#endif // C_DEBUG
                 temp_worker->commanded_refresh = true;
                 kill( temp_worker->pid, SIGHUP );
                 sleep( 1 );
             }
-
+#ifdef C_DEBUG
             _log( LOG_LEVEL_DEBUG, "Worker %d has reloaded pointers", temp_worker->pid );
+#endif // C_DEBUG
         }
 
         free( temp );
@@ -1894,7 +1937,7 @@ void _child_update_pointers( void )
 
     if( !me->commanded_refresh )
         return;
-
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "\nPID %d updating PID table:\n"\
@@ -1908,7 +1951,7 @@ void _child_update_pointers( void )
         event_jobs,
         me->new_event_jobs
     );
-
+#endif // C_DEBUG
     work_jobs  = me->new_work_jobs;
     event_jobs = me->new_event_jobs;
 
@@ -1955,28 +1998,34 @@ void _manage_children( void (*function)( void * ) )
     pid_t           pid      = 0;
     unsigned int    tid      = 0;
     int             wstatus  = 0;
-
+#ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "Parent entering maintenance loop" );
-
+#endif // C_DEBUG
     for( tid = 0; tid < ( event_jobs + work_jobs ); tid++ )
     {
         if( got_sighup )
         {
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Parent received sighup, entering handler"
             );
+#endif // C_DEBUG
             _parent_handle_sighup();
         }
 
+#ifdef C_DEBUG
         _log( LOG_LEVEL_DEBUG, "Checking TID %d of workers %p (%p)", tid, workers, workers[tid] );
+#endif // C_DEBUG
         if( workers[tid] == NULL )
         {
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Skipping dead worker at index %u",
                 tid
             );
+#endif // C_DEBUG
             continue;
         }
 
@@ -2209,17 +2258,21 @@ void _child_handle_sighup( void )
             PQexec( me->conn, "ROLLBACK" );
             me->tx_in_progress = false;
 
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Successfully rolled back in progress transaction"
             );
+#endif // C_DEBUG
         }
         else
         {
+#ifdef C_DEBUG
             _log(
                 LOG_LEVEL_DEBUG,
                 "Transaction is in progress but conn handle is dead"
             );
+#endif // C_DEBUG
         }
     }
 
@@ -2240,11 +2293,12 @@ void _child_handle_sighup( void )
     signal ( SIGHUP, __sighup );
 
     me->status = STATUS_WORKING;
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "Child reset status to working"
     );
-
+#endif // C_DEBUG
     got_sighup = false;
     return;
 }
@@ -2274,14 +2328,14 @@ void _parent_handle_sighup( void )
                     if( workers[i]->tx_in_progress )
                     {
                         busy_count++;
-
+#ifdef C_DEBUG
                         _log(
                             LOG_LEVEL_DEBUG,
                             "Worker %d is in a transaction and cannot "\
                             "process SIGHUP",
                             workers[i]->pid
                         );
-
+#endif // C_DEBUG
                         if( sleep_backoff == 0 )
                         {
                             // Use MAX_LOG_WAIT to extend the sleep time
@@ -2290,23 +2344,27 @@ void _parent_handle_sighup( void )
                     }
                     else
                     {
+#ifdef C_DEBUG
                         _log(
                             LOG_LEVEL_DEBUG,
                             "The following worker has failed to re-enter "\
                             "working state following SIGHUP"
                          );
                         _debug_worker_slot( workers[i] );
+#endif // C_DEBUG
                     }
 
                     waitpid( workers[i]->pid, &wstatus, WNOHANG );
 
                     if( WIFSIGNALED( wstatus ) )
                     {
+#ifdef C_DEBUG
                         _log(
                             LOG_LEVEL_DEBUG,
                             "FYI worker exited with status %d",
                             WTERMSIG( wstatus )
                         );
+#endif // C_DEBUG
                     }
                 }
             }
@@ -2324,19 +2382,23 @@ void _parent_handle_sighup( void )
         {
             if( busy_count > 0 )
             {
+#ifdef C_DEBUG
                 _log(
                     LOG_LEVEL_DEBUG,
                     "There are %u worker(s) that are currently "\
                     "processing items",
                     busy_count
                 );
+#endif // C_DEBUG
             }
             else
             {
+#ifdef C_DEBUG
                 _log(
                     LOG_LEVEL_WARNING,
                     "Not all workers have ACK'd the SIGHUP"
                 );
+#endif // C_DEBUG
             }
         }
     }
@@ -2382,20 +2444,23 @@ void _set_process_title(
 
     if( title == NULL )
     {
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "NULL process title provided"
         );
+#endif // C_DEBUG
         return;
     }
 
     if( argv == NULL )
     {
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "ARGV is null :("
         );
-
+#endif // C_DEBUG
         return;
     }
 
@@ -2416,12 +2481,13 @@ void _set_process_title(
             }
         }
 
+#ifdef C_DEBUG
         _log(
             LOG_LEVEL_DEBUG,
             "Argv total size: %u",
             size
         );
-
+#endif // C_DEBUG
         *max_size = size;
     }
 
@@ -2438,7 +2504,7 @@ void _debug_worker_slot( struct worker * worker )
     {
         return;
     }
-
+#ifdef C_DEBUG
     _log(
         LOG_LEVEL_DEBUG,
         "\nWorker struct %p\n"\
@@ -2481,6 +2547,6 @@ void _debug_worker_slot( struct worker * worker )
         worker->my_argv,
         worker->pidfile
     );
-
+#endif // C_DEBUG
     return;
 }
