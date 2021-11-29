@@ -7,7 +7,7 @@
  * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        strings.h
+ *        src/lib/strings.h
  *
  *------------------------------------------------------------------------
  */

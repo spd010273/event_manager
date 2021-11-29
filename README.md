@@ -11,6 +11,7 @@ Events can be processed either synchronously or asynchronously.
 
 ![Concept](images/event_manager_concept.png)
 
+Conceptually, Event Manager implements asynchronous database triggers. The event queue is a queue of triggers to be executed, and the work queue being the output of those triggers.
 
 # Usage
 

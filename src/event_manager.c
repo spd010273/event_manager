@@ -7,16 +7,20 @@
  * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        event_manager.c
+ *        src/event_manager.c
  *
  *------------------------------------------------------------------------
  */
+
 /*
+ * Dev Note:
+ *
  * Compile with -DC_DEBUG to get C language specific debugging messages
  * Compile with -DEVENT_DEBUG to get SQL/REST specific debugging messages
  * Either of these flags will turn on the -DDEBUG flag for generic debugging
  *  messages
  */
+
 /* Includes */
 #include "event_manager.h"
 

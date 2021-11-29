@@ -16,7 +16,7 @@ Additionally, there is a setup script in the tools directory that initializes ev
 
 ## Debugging
 
-To enable debug mode in the Event and Work queue processing daemons, uncomment the line in Makefile 'DEBUG = -DDEBUG -g'
+To enable debug mode in the Event and Work queue processing daemons, uncomment the appropriate line in the makefile (C_DEBUG for C debugging, EVENT_DEBUG for event / work item debugging), then rebuild the executable.
 Setting event_manager.debug = 'TRUE' GUC will enable SQL function debug messages. These will be emitted at level DEBUG, you may need to change client_min_messages or log_min_messages in postgresql.conf or with:
 ```sql
 SET client_min_message = 'DEBUG';

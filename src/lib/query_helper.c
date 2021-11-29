@@ -7,7 +7,7 @@
  * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        query_helper.c
+ *        src/lib/query_helper.c
  *
  *------------------------------------------------------------------------
  */

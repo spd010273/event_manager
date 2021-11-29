@@ -7,7 +7,7 @@
  * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        util.c
+ *        src/lib/util.c
  *
  *------------------------------------------------------------------------
  */

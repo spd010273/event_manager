@@ -7,7 +7,7 @@
  * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
- *        event_manager.h
+ *        src/event_manager.h
  *
  *------------------------------------------------------------------------
  */
