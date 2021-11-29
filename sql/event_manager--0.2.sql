@@ -4,6 +4,7 @@
  *     Event Manager extension schema for version 0.2
  *
  * Copyright (c) 2021, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        event_manager--0.2.sql

@@ -4,6 +4,7 @@
  *     Utility function prototypes and process managment routines
  *
  * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        util.h

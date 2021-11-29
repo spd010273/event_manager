@@ -4,6 +4,7 @@
  *     Main event_manager routine and functions
  *
  * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        event_manager.c

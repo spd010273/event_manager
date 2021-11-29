@@ -4,6 +4,7 @@
  *     Utility and process management functions
  *
  * Copyright (c) 2018, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        util.c

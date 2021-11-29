@@ -25,6 +25,7 @@ define __VERSION_H_SOURCE
  *     Versioning information and feature flags
  *
  * Copyright (c) 2021, Nead Werx, Inc.
+ * Copyright (c) 2021, MerchLogix Inc.
  *
  * IDENTIFICATION
  *        version.h
