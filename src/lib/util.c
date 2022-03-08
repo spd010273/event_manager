@@ -1256,6 +1256,20 @@ void __term( void )
 #ifdef C_DEBUG
     _log( LOG_LEVEL_DEBUG, "__term() invoked for PID %d", getpid() );
 #endif // C_DEBUG
+
+    // Immediately disconnect and terminate any open TXs in the DB.
+    if( me->conn != NULL )
+    {
+        if( me->tx_in_progress )
+        {
+            PQexec( me->conn, "ROLLBACK" );
+            me->tx_in_progress = false;
+        }
+
+        PQfinish( me->conn );
+        me->conn = NULL;
+    }
+
     if( me->type != WORKER_TYPE_PARENT )
     {
         // just exit, let parent cleanup
@@ -1269,18 +1283,6 @@ void __term( void )
         if( me == NULL )
         {
             exit(0);
-        }
-
-        if( me->conn != NULL && PQstatus( me->conn ) == CONNECTION_OK )
-        {
-            if( me->tx_in_progress )
-            {
-                PQexec( me->conn, "ROLLBACK" );
-                me->tx_in_progress = false;
-            }
-
-            PQfinish( me->conn );
-            me->conn = NULL;
         }
 
         if( me->enable_curl || me->curl_handle != NULL )
@@ -1301,17 +1303,14 @@ void __term( void )
             LOG_LEVEL_INFO,
             "Parent disconnected from DB, EM may be restarted"
         );
-        if( me->conn != NULL )
-        {
-            PQfinish( me->conn );
-            me->conn = NULL;
-        }
 
         _log(
             LOG_LEVEL_INFO,
             "Event Manager is exiting..."
         );
+
         sleep( 1 );
+
         for( i = 0; i < ( work_jobs + event_jobs ); i++ )
         {
             if( workers[i] != NULL )

@@ -51,19 +51,29 @@ BASH
 Readonly my $STOP_SH => <<BASH;
 #!/bin/bash
 #    This script will stop the event_manager daemons
+pid=0
 if [ -f /var/run/event_manager.pid ]; then
-    kill \$(cat /var/run/event_manager.pid)
+    pid=\$(cat /var/run/event_manager.pid)
     rm /var/run/event_manager.pid
 elif [ -f ~/event_manager.pid ]; then
-    kill \$(cat ~/event_manager.pid)
+    pid=\$(cat ~/event_manager.pid)
     rm ~/event_manager.pid
 elif [ -f ./event_manager.pid ]; then
-    kill \$(cat ./event_manager.pid)
+    pid=\$(cat ./event_manager.pid)
     rm ./event_manager.pid
 else
     echo "Could not locate PID file!"
+    exit 1
 fi
 
+kill \$pid
+
+while kill -0 \$pid; do
+    echo "Waiting on Event Manager to exit..."
+    sleep 2
+done
+
+exit 0
 BASH
 
 Readonly my $RELOAD_SH => <<BASH;
