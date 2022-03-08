@@ -429,7 +429,11 @@ static bool db_connect( struct worker * me )
 
     if( me->conn != NULL && PQstatus( me->conn  ) == CONNECTION_OK )
     {
-        _get_advisory_lock( me );
+        if( !_get_advisory_lock( me ) )
+        {
+            _log( LOG_LEVEL_WARNING, "Failed to acquire advisory lock after reconnect" );
+        }
+
         _set_application_name ( me );
 
         return true;
@@ -3687,6 +3691,10 @@ static bool _get_advisory_lock( struct worker * me )
 
     if( me->conn == NULL )
     {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Failed to acquire advisory lock: NULL connection"
+        );
         return false;
     }
 
@@ -3755,6 +3763,10 @@ static bool _get_advisory_lock( struct worker * me )
             PQclear( result );
         }
 
+        _log(
+            LOG_LEVEL_ERROR,
+            "Failed to get advisory lock: NULL pg_try_advisory_lock result"
+        );
         return false;
     }
 
@@ -3764,6 +3776,10 @@ static bool _get_advisory_lock( struct worker * me )
         return true;
     }
 
+    _log(
+        LOG_LEVEL_WARNING,
+        "Failed to get advisory lock: Lock is already held"
+    );
     PQclear( result );
     return false;
 }
@@ -3777,10 +3793,22 @@ static bool parent_get_advisory_lock( void )
     me = get_worker_by_pid();
 
     if( me == NULL )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Parent could not acquire advisory lock: NULL worker structure"
+        );
         return false;
+    }
 
     if( me->type != WORKER_TYPE_PARENT )
+    {
+        _log(
+            LOG_LEVEL_WARNING,
+            "Parent could not acquire advisory lock: worker is not the parent process"
+        );
         return false;
+    }
 
     result = PQexecParams(
         me->conn,
@@ -3806,7 +3834,7 @@ static bool parent_get_advisory_lock( void )
             PQclear( result );
         }
 
-        _log( LOG_LEVEL_FATAL, "Failed to get parent's advisory lock: %s", PQerrorMessage( me->conn ) );
+        _log( LOG_LEVEL_ERROR, "Failed to get parent's advisory lock: %s", PQerrorMessage( me->conn ) );
         return false;
     }
 
