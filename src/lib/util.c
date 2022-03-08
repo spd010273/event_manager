@@ -1299,6 +1299,16 @@ void __term( void )
         // I'm the parent
         _log(
             LOG_LEVEL_INFO,
+            "Parent disconnected from DB, EM may be restarted"
+        );
+        if( me->conn != NULL )
+        {
+            PQfinish( me->conn );
+            me->conn = NULL;
+        }
+
+        _log(
+            LOG_LEVEL_INFO,
             "Event Manager is exiting..."
         );
         sleep( 1 );
