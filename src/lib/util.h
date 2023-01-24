@@ -153,26 +153,27 @@ struct em_stat {
 };
 
 // Global variables
-unsigned int event_jobs;
-unsigned int work_jobs;
+extern unsigned int event_jobs;
+extern unsigned int work_jobs;
 #ifdef ALLOW_OVERRIDE_WORKER_COUNTS
-unsigned int override_event_jobs;
-unsigned int override_work_jobs;
+extern unsigned int override_event_jobs;
+extern unsigned int override_work_jobs;
 #endif // ALLOW_OVERRIDE_WORKER_COUNTS
 
-bool daemonize;
-bool single_step_only;
-char * conninfo;
-FILE * log_file;
+extern bool daemonize;
+extern char * conninfo;
+extern bool single_step_only;
+extern FILE * log_file;
+extern unsigned int max_argv_size; 
 
 volatile sig_atomic_t got_sighup;
 volatile sig_atomic_t got_sigterm;
 volatile sig_atomic_t got_sigint;
 
-struct worker ** workers;
-struct worker * parent;
+extern struct worker ** workers;
+extern struct worker * parent;
 #ifdef ALLOW_CONFIG_MANAGER
-struct worker * config;
+extern struct worker * config;
 #endif // ALLOW_CONFIG_MANAGER
 
 void _parse_args( int, char ** );
