@@ -166,9 +166,9 @@ extern bool single_step_only;
 extern FILE * log_file;
 extern unsigned int max_argv_size; 
 
-volatile sig_atomic_t got_sighup;
-volatile sig_atomic_t got_sigterm;
-volatile sig_atomic_t got_sigint;
+volatile extern sig_atomic_t got_sighup;
+volatile extern sig_atomic_t got_sigterm;
+volatile extern sig_atomic_t got_sigint;
 
 extern struct worker ** workers;
 extern struct worker * parent;
