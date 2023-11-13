@@ -9,7 +9,7 @@ Event Manager consists of two processing loops handing events and work, respecti
 
 Events can be processed either synchronously or asynchronously.
 
-![Concept](images/event_manager_concept.png)
+![Concept](images/event_manager_concept.png | width=400)
 
 Conceptually, Event Manager implements asynchronous database triggers. The event queue is a queue of triggers to be executed, and the work queue being the output of those triggers.
 
@@ -36,11 +36,11 @@ This query gathers the dynamic arguments for the following Action, and together 
 
 Actions are either local database modification or remote API calls that happen after an event is processed. Parameters for these calls are gathered from the action's static parameter list, as well as the results from the work item query, or static parameters stored with the action. Results of actions are currently discarded.
 
-![FlowChart](images/event_manager_flow.png)
+![FlowChart](images/event_manager_flow.png | width=400)
 
 # Schema
 
-![Schema](images/event_manager_schema.png)
+![Schema](images/event_manager_schema.png | width=400)
 
 ## Requirements:
 
