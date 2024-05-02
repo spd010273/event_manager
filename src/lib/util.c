@@ -208,14 +208,14 @@ void _parse_args( int argc, char ** argv )
         );
     }
 
-    strncpy( conninfo, "user="    );
-    strncat( conninfo, username   );
-    strncat( conninfo, " host="   );
-    strncat( conninfo, hostname   );
-    strncat( conninfo, " port="   );
-    strncat( conninfo, port       );
-    strncat( conninfo, " dbname=" );
-    strncat( conninfo, dbname     );
+    strcpy( conninfo, "user="    );
+    strcat( conninfo, username   );
+    strcat( conninfo, " host="   );
+    strcat( conninfo, hostname   );
+    strcat( conninfo, " port="   );
+    strcat( conninfo, port       );
+    strcat( conninfo, " dbname=" );
+    strcat( conninfo, dbname     );
     conninfo[len - 1] = '\0';
 
 #ifdef C_DEBUG
