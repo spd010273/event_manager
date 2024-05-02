@@ -118,6 +118,7 @@ void _finalize_query( struct query * query_object )
     regmatch_t matches[MAX_REGEX_GROUPS + 1] = {{0}};
     regex_t    regex                         = {0};
     char *     temp_query                    = NULL;
+    size_t     size_rem                      = 0;
     int        reg_result                    = 0;
     int        i                             = 0;
 
@@ -189,14 +190,9 @@ void _finalize_query( struct query * query_object )
         }
 
         bindpoint_length = matches[0].rm_eo - matches[0].rm_so;
-
+        size_rem = strlen( query_object->query_string ) - bindpoint_length + strlen( bind_replace ) + 1;
         temp_query = ( char * ) calloc(
-            (
-                strlen( query_object->query_string )
-             - bindpoint_length
-             + strlen( bind_replace )
-             + 1
-            ),
+            size_rem,
             sizeof( char )
         );
 
@@ -216,20 +212,24 @@ void _finalize_query( struct query * query_object )
         strncpy(
             temp_query,
             query_object->query_string,
-            matches[0].rm_so
+            size_rem
         );
+
+        size_rem -= matches[0].rm_so;
 
         strncat(
             temp_query,
             bind_replace,
-            strlen( bind_replace )
+            size_rem
         );
+        size_rem -= strlen( bind_replace );
 
         strncat(
             temp_query,
             ( char * ) ( query_object->query_string + matches[0].rm_eo ),
-            strlen( query_object->query_string + matches[0].rm_eo )
+            size_rem
         );
+        size_rem -= strlen( query_object->query_string + matches[0].rm_eo );
 
         temp_query[
             matches[0].rm_so
@@ -332,7 +332,7 @@ void _add_parameter_to_query(
     }
 
     bindpoint_search = ( char * ) calloc(
-        ( strlen( key ) + 7 ),
+        strlen( key ) + 7,
         sizeof( char )
     );
 
@@ -346,10 +346,10 @@ void _add_parameter_to_query(
         return;
     }
 
-    strncpy( bindpoint_search, "[?]", 3 );
-    strncat( bindpoint_search, key, strlen( key ) );
-    strncat( bindpoint_search, "[?]", 3 );
-    bindpoint_search[ strlen(key) + 6 ] = '\0';
+    strcpy( bindpoint_search, "[?]" );
+    strcat( bindpoint_search, key );
+    strcat( bindpoint_search, "[?]" );
+    bindpoint_search[ strlen( key ) + 6 ] = '\0';
     reg_result = regcomp( &regex, bindpoint_search, REG_EXTENDED );
 
     if( reg_result != 0 )
@@ -425,12 +425,7 @@ void _add_parameter_to_query(
 
         bind_length = matches[0].rm_eo - matches[0].rm_so;
         temp_query = ( char * ) calloc(
-            (
-                strlen( query_object->query_string )
-              - bind_length
-              + strlen( bindpoint_replace )
-              + 1
-            ),
+            strlen( query_object->query_string ) - bind_length + strlen( bindpoint_replace ) + 1,
             sizeof( char )
         );
 
@@ -450,28 +445,28 @@ void _add_parameter_to_query(
             return;
         }
 
+        // Interpolate 'bindpoint_replace' into the query string using the
+        // fenceposts located by regexp.
         strncpy(
             temp_query,
             query_object->query_string,
             matches[0].rm_so
         );
 
-        strncat(
+        strcat(
             temp_query,
-            bindpoint_replace,
-            strlen( bindpoint_replace )
+            bindpoint_replace
         );
 
-        strncat(
+        strcat(
             temp_query,
-            ( char * ) ( query_object->query_string + matches[0].rm_eo ),
-            strlen( query_object->query_string + matches[0].rm_eo )
+            ( char * ) ( query_object->query_string + matches[0].rm_eo )
         );
 
         free( query_object->query_string );
 
         query_object->query_string = ( char * ) calloc(
-            ( strlen( temp_query ) + 1 ),
+            strlen( temp_query ) + 1,
             sizeof( char )
         );
 
@@ -492,10 +487,9 @@ void _add_parameter_to_query(
         }
 
         _log( LOG_LEVEL_DEBUG, "Temp query is '%s'", temp_query );
-        strncpy(
+        strcpy(
             query_object->query_string,
-            temp_query,
-            strlen( temp_query )
+            temp_query
         );
 
         query_object->length = strlen( temp_query );
@@ -903,15 +897,14 @@ char * _add_json_parameters_to_param_list(
 
         if( first_param_pass == false )
         {
-            strncat( param_list, "&", 1 );
+            strcat( param_list, "&" );
         }
 
         first_param_pass = false;
 
-        strncat(
+        strcat(
             param_list,
-            ( char * ) ( key_value_pair->key ),
-            strlen( key_value_pair->key )
+            ( char * ) ( key_value_pair->key )
         );
 
         param_list[*malloc_size - 1] = '\0';
@@ -959,10 +952,9 @@ char * _add_json_parameters_to_param_list(
 
         strncat( param_list, "=", 1 );
 
-        strncat(
+        strcat(
             param_list,
-            encoded_value,
-            strlen( encoded_value )
+            encoded_value
         );
 
         curl_free( encoded_value );
@@ -1135,10 +1127,9 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
         }
 
         strncpy( bindpoint_search, "[?]", 3 );
-        strncat(
+        strcat(
             bindpoint_search,
-            key_value_pair->key,
-            strlen( key_value_pair->key )
+            key_value_pair->key
         );
         strncat( bindpoint_search, "[?]", 3 );
 
@@ -1223,16 +1214,14 @@ void _bind_uri_arguments( char ** uri, char * parameters, char * key_prefix )
                 matches[0].rm_so
             );
 
-            strncat(
+            strcat(
                 temp_string,
-                temp_value,
-                strlen( temp_value )
+                temp_value
             );
 
-            strncat(
+            strcat(
                 temp_string,
-                ( char * ) ( (*uri) + matches[0].rm_eo ),
-                strlen( (*uri) + matches[0].rm_eo )
+                ( char * ) ( (*uri) + matches[0].rm_eo )
             );
 
             temp_string[

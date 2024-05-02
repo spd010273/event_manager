@@ -670,6 +670,7 @@ static void _queue_loop( struct worker * me )
 {
     PGnotify *     notify          = NULL;
     char *         listen_command  = NULL;
+    size_t         length          = 0;
 #ifdef ALLOW_QUEUE_CHECK_WITH_GUC
     PGresult *     qc_result       = NULL;
     char *         disable_queue   = NULL;
@@ -794,8 +795,9 @@ static void _queue_loop( struct worker * me )
     }
 #endif // ALLOW_CONFIG_MANAGER
 
+    length = strlen( me->channel ) + 10;
     listen_command  = ( char * ) calloc(
-        ( strlen( me->channel ) + 10 ),
+        length,
         sizeof( char )
     );
 
@@ -808,13 +810,13 @@ static void _queue_loop( struct worker * me )
     }
 
     /* Command: 'LISTEN "?"\0' */
-    strncpy( listen_command, "LISTEN \"", 8 );
+    strncpy( listen_command, "LISTEN \"", length );
     strncat(
         listen_command,
         ( const char * ) me->channel,
-        strlen( me->channel )
+        length - 8
     );
-    strncat( listen_command, "\"\0", 2 );
+    strncat( listen_command, "\"\0", length );
 
     listen_result = _execute_query(
         me,
@@ -1733,6 +1735,7 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
     long int             response_code = 0;
     unsigned short       retry_count   = 0;
     unsigned short       method_len    = 0;
+    size_t               length        = 0;
 
     if( action == NULL )
     {
@@ -1978,8 +1981,9 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
        || strncmp( action->method, "PUT", MIN( method_len, 3 ) ) == 0
       )
     {
+        length = ( strlen( action->uri ) + strlen( param_list ) + 1 );
         remote_call = ( char * ) calloc(
-            ( strlen( action->uri ) + strlen( param_list ) + 1 ),
+            length,
             sizeof( char )
         );
 
@@ -1994,8 +1998,8 @@ static bool execute_remote_uri_call( struct worker * me, struct action_result * 
             return false;
         }
 
-        strncpy( remote_call, action->uri, strlen( action->uri ) );
-        strncat( remote_call, param_list, strlen( param_list ) );
+        strncpy( remote_call, action->uri, length );
+        strncat( remote_call, param_list, length - strlen( action->uri ) );
     }
     else
     {
@@ -2425,6 +2429,7 @@ static bool set_uid( struct worker * me, char * uid, char * session_values )
     char * params[1]         = {NULL};
     char * uid_function_name = NULL;
     char * set_uid_query     = NULL;
+    size_t length            = 0;
 
     params[0] = SET_UID_GUC_NAME;
 
@@ -2462,8 +2467,9 @@ static bool set_uid( struct worker * me, char * uid, char * session_values )
         "uid_function"
     );
 
+    length = strlen( uid_function_name ) + 8;
     set_uid_query = ( char * ) calloc(
-        ( strlen( uid_function_name ) + 8 ),
+        length,
         sizeof( char )
     );
 
@@ -2475,11 +2481,11 @@ static bool set_uid( struct worker * me, char * uid, char * session_values )
         );
     }
 
-    strncpy( set_uid_query, "SELECT ", 7 );
+    strncpy( set_uid_query, "SELECT ", length );
     strncat(
         set_uid_query,
         uid_function_name,
-        strlen( uid_function_name )
+        length - 7
     );
 
     set_uid_query_obj = _new_query( set_uid_query );

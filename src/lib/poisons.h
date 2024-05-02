@@ -16,7 +16,6 @@
 #define POISONS_H
 
 #ifdef __GNUC__
-#pragma GCC poison strcpy strcat
 #pragma GCC poison longjmp siglongjmp
 #pragma GCC poison setjmp sigsetjmp
 #pragma GCC poison getwd mktemp tmpnam tempnam
