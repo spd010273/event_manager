@@ -118,7 +118,6 @@ void _finalize_query( struct query * query_object )
     regmatch_t matches[MAX_REGEX_GROUPS + 1] = {{0}};
     regex_t    regex                         = {0};
     char *     temp_query                    = NULL;
-    size_t     size_rem                      = 0;
     int        reg_result                    = 0;
     int        i                             = 0;
 
@@ -190,9 +189,8 @@ void _finalize_query( struct query * query_object )
         }
 
         bindpoint_length = matches[0].rm_eo - matches[0].rm_so;
-        size_rem = strlen( query_object->query_string ) - bindpoint_length + strlen( bind_replace ) + 1;
         temp_query = ( char * ) calloc(
-            size_rem,
+            strlen( query_object->query_string ) - bindpoint_length + strlen( bind_replace ) + 1,
             sizeof( char )
         );
 
@@ -212,24 +210,18 @@ void _finalize_query( struct query * query_object )
         strncpy(
             temp_query,
             query_object->query_string,
-            size_rem
+            matches[0].rm_so
         );
 
-        size_rem -= matches[0].rm_so;
-
-        strncat(
+        strcat(
             temp_query,
-            bind_replace,
-            size_rem
+            bind_replace
         );
-        size_rem -= strlen( bind_replace );
 
-        strncat(
+        strcat(
             temp_query,
-            ( char * ) ( query_object->query_string + matches[0].rm_eo ),
-            size_rem
+            ( char * ) ( query_object->query_string + matches[0].rm_eo )
         );
-        size_rem -= strlen( query_object->query_string + matches[0].rm_eo );
 
         temp_query[
             matches[0].rm_so
