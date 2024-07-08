@@ -68,7 +68,7 @@ RETURNS VARCHAR AS
                )
            );
  $_$
-LANGUAGE SQL STABLE PARALLEL SAFE;
+LANGUAGE SQL VOLATILE PARALLEL SAFE;
 
 CREATE FUNCTION @extschema@.fn_set_configuration()
 RETURNS TRIGGER AS
@@ -415,6 +415,7 @@ DECLARE
     my_guc_values               JSONB;
     my_source_columns           VARCHAR;
     my_update_diff              BOOLEAN;
+    my_session_gucs             VARCHAR;
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
         my_record := NEW;
@@ -444,19 +445,20 @@ BEGIN
        INTO my_pk_value
       USING my_record;
 
-    EXECUTE 'SELECT ' || COALESCE( current_setting( '@extschema@.get_uid_function', TRUE ),
-                        'NULL'
-                    ) || '::INTEGER'
+    EXECUTE 'SELECT ' || COALESCE( @extschema@.fn_get_config( '@extschema@.get_uid_function' ), 'NULL' ) || '::INTEGER'
        INTO my_uid;
 
-    IF( length( current_setting( '@extschema@.session_gucs', TRUE ) ) > 0 ) THEN
+    SELECT @extschema@.fn_get_config( '@extschema@.session_gucs' )
+      INTO my_session_gucs;
+
+    IF( length( my_session_gucs ) > 0 ) THEN
         SELECT jsonb_object(
                    array_agg( x ORDER BY x ),
                    array_agg( current_setting( x, TRUE ) ORDER BY x )
                )
           INTO my_guc_values
           FROM regexp_split_to_table(
-                   current_setting( '@extschema@.session_gucs', TRUE ),
+                   my_session_gucs,
                    ','
                ) x;
     END IF;

@@ -11,6 +11,22 @@
  *
  *------------------------------------------------------------------------
  */
+CREATE OR REPLACE FUNCTION event_manager.fn_get_config
+(
+    in_name VARCHAR
+)
+RETURNS VARCHAR AS
+ $_$
+    SELECT COALESCE(
+               NULLIF( current_setting( in_name, TRUE ), '' ),
+               (
+                   SELECT set_config( key, value, TRUE )
+                     FROM event_manager.tb_setting
+                    WHERE key = in_name
+               )
+           );
+ $_$
+LANGUAGE SQL VOLATILE PARALLEL SAFE;
 
 CREATE OR REPLACE FUNCTION @extschema@.fn_get_boolean_guc_value
 (
@@ -323,6 +339,7 @@ DECLARE
     my_guc_values               JSONB;
     my_source_columns           VARCHAR;
     my_update_diff              BOOLEAN;
+    my_session_gucs             VARCHAR;
 BEGIN
     IF( TG_OP = 'INSERT' ) THEN
         my_record := NEW;
@@ -352,19 +369,20 @@ BEGIN
        INTO my_pk_value
       USING my_record;
 
-    EXECUTE 'SELECT ' || COALESCE( current_setting( '@extschema@.get_uid_function', TRUE ),
-                        'NULL'
-                    ) || '::INTEGER'
+    EXECUTE 'SELECT ' || COALESCE( @extschema@.fn_get_config( '@extschema@.get_uid_function' ), 'NULL' ) || '::INTEGER'
        INTO my_uid;
 
-    IF( length( current_setting( '@extschema@.session_gucs', TRUE ) ) > 0 ) THEN
+    EXECUTE 'SELECT ' || @extschema@.fn_get_config( '@extschema@.session_gucs' )
+       INTO my_session_gucs;
+
+    IF( length( my_session_gucs ) > 0 ) THEN
         SELECT jsonb_object(
                    array_agg( x ORDER BY x ),
                    array_agg( current_setting( x, TRUE ) ORDER BY x )
                )
           INTO my_guc_values
           FROM regexp_split_to_table(
-                   current_setting( '@extschema@.session_gucs', TRUE ),
+                   my_session_gucs,
                    ','
                ) x;
     END IF;
