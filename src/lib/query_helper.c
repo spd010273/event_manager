@@ -429,7 +429,6 @@ void _add_parameter_to_query(
             );
 
             free( bindpoint_search );
-            free( query_object );
             free( bindpoint_replace );
             regfree( &regex );
             _free_query( query_object );
