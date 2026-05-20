@@ -13,7 +13,7 @@ ExecReload=/usr/bin/event_manager-reload.sh
 
 KillMode=process
 KillSignal=SIGTERM
-TimeoutSec=10s
+TimeoutSec=30s
 
 [Install]
 WantedBy=multi-user.target
