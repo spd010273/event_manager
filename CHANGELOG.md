@@ -21,7 +21,27 @@
 
 ### Fixed:
 - Possible SIGSEGV on parent __term() invokation on slow machines / with valgrind running (race condition)
-- Possible SIGSEVG in transaction failure marking
+- Possible SIGSEGV in transaction failure marking
 - Test harness (run_tests.pl) improperly handling versions
 - Usage of strcpy/strcat/strcmp (now slightly less dangerous strncpy/strncat/strncmp)
 - Memory leak in stat update (not freeing result handle)
+
+
+## SECURITY
+
+### 2026-10-06:
+- Fixed security issue with a local privelege escalation via abuse of implicit REFERENCE GRANT to tb_event_table_work_item_instance. Users are strongly encouraged to execute the following:
+```REVOKE ALL ON event_manager.tb_event_queue FROM public;
+REVOKE ALL ON event_manager.tb_work_queue FROM public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_queue TO public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_work_queue TO public;
+REVOKE ALL ON event_manager.tb_statistic FROM public;
+GRANT SELECT ON event_manager.tb_statistic TO public;
+REVOKE ALL ON event_manager.tb_event_table_work_item FROM public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_table_work_item TO public;
+REVOKE ALL ON event_manager.tb_event_table_work_item_instance FROM public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_table_work_item_instance TO public;```
+
+- Fixed security issue where an low priviledge user could override the session_values in queue tables and modify server settings. This has been restricted to any GUC which does not appear in `pg_settings`
+
+This impact both version 0.1 and 0.2 of the extension.

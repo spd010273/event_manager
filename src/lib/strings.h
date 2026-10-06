@@ -157,10 +157,24 @@ INSERT INTO " EXTENSION_NAME ".tb_work_queue \
             )";
 
 static const char * _uid_function = "\
+WITH tt_uid_function_lookup AS \
+( \
     SELECT current_setting( \
                '" EXTENSION_NAME ".' || $1::VARCHAR, \
                TRUE \
-           ) AS uid_function";
+           ) AS uid_function, \
+           1 AS rank_order \
+     UNION ALL \
+    SELECT value AS uid_function, \
+           2 AS rank_order \
+      FROM " EXTENSION_NAME ".tb_setting \
+     WHERE key = '" EXTENSION_NAME ".' || $2 \
+) \
+    SELECT uid_function \
+      FROM tt_uid_function_lookup \
+     WHERE uid_function IS NOT NULL \
+  ORDER BY rank_order ASC \
+     LIMIT 1";
 
 static const char * cyanaudit_check = "\
     SELECT p.proname::VARCHAR \
@@ -173,11 +187,28 @@ INNER JOIN pg_namespace n \
 static const char * cyanaudit_label_tx = "\
     SELECT cyanaudit.fn_label_last_transaction( $1 )";
 
+// Prevent malicious user from changing a server GUC
 static const char * set_guc = "\
-    SELECT set_config( $1, $2, TRUE )";
+WITH tt_guc_check AS \
+( \
+  SELECT $1 AS name \
+) \
+    SELECT set_config( tt.name, $2, TRUE ) \
+      FROM tt_guc_check tt \
+ LEFT JOIN pg_catalog.pg_settings s \
+        ON s.name = tt.name \
+     WHERE s.setting IS NULL";
 
 static const char * clear_guc = "\
-    SELECT set_config( $1, NULL, TRUE )";
+WITH tt_guc_check AS \
+( \
+    SELECT $1 as name \
+) \
+    SELECT set_config( tt.name, NULL, TRUE ) \
+      FROM tt_guc_check tt \
+ LEFT JOIN pg_catalog.pg_settings s \
+        ON s.name = tt.name \
+     WHERE s.setting IS NULL";
 
 static const char * set_application_name = "\
     SET application_name = '";

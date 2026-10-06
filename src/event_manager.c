@@ -2426,18 +2426,19 @@ static bool set_uid( struct worker * me, char * uid, char * session_values )
     PGresult *     uid_function_result = NULL;
     struct query * set_uid_query_obj   = NULL;
 
-    char * params[1]         = {NULL};
+    char * params[2]         = {NULL};
     char * uid_function_name = NULL;
     char * set_uid_query     = NULL;
     size_t length            = 0;
 
     params[0] = SET_UID_GUC_NAME;
+    params[1] = SET_UID_GUC_NAME;
 
     uid_function_result = _execute_query(
         me,
         ( char * ) _uid_function,
         params,
-        1
+        2
     );
 
     if( uid_function_result == NULL )
