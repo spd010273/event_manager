@@ -569,3 +569,12 @@ BEGIN
 END
  $_$
     LANGUAGE 'plpgsql' VOLATILE PARALLEL UNSAFE SECURITY DEFINER;
+
+REVOKE ALL ON @extschema@.tb_event_queue FROM public;
+REVOKE ALL ON @extschema@.tb_work_queue FROM public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON @extschema@.tb_event_queue TO public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON @extschema@.tb_work_queue TO public;
+REVOKE ALL ON @extschema@.tb_statistic FROM public;
+GRANT SELECT ON @extschema@.tb_statistic TO public;
+REVOKE ALL ON @extschema@.tb_event_table_work_item FROM public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON @extschema@.tb_event_table_work_item TO public;

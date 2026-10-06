@@ -1150,13 +1150,15 @@ CREATE TRIGGER tr_validate_when_function
     BEFORE INSERT OR UPDATE OF when_function ON @extschema@.tb_event_table_work_item
     FOR EACH ROW EXECUTE PROCEDURE @extschema@.fn_validate_function();
 
-GRANT ALL ON @extschema@.tb_event_queue TO public;
-GRANT ALL ON @extschema@.tb_work_queue TO public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON @extschema@.tb_event_queue TO public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON @extschema@.tb_work_queue TO public;
 GRANT SELECT ON @extschema@.tb_event_table_work_item TO public;
 GRANT SELECT ON @extschema@.tb_action TO public;
 GRANT SELECT ON @extschema@.tb_setting TO public;
 GRANT SELECT ON @extschema@.tb_event_table TO public;
-GRANT ALL ON @extschema@.tb_event_table_work_item_instance TO public;
-GRANT ALL ON @extschema@.tb_statistic TO public;
+GRANT SELECT, INSERT, UPDATE, DELETE ON @extschema@.tb_event_table_work_item_instance TO public;
+GRANT SELECT ON @extschema@.tb_statistic TO public;
 GRANT USAGE, SELECT ON SEQUENCE @extschema@.sq_pk_event_table_work_item_instance TO public;
 GRANT USAGE ON SCHEMA @extschema@ TO public;
+
+INSERT INTO @extschema@.tb_setting( key, value ) VALUES ( '@extschema@.default_when_function', '@extschema@.fn_dummy_when_function' );
