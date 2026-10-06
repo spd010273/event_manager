@@ -197,7 +197,8 @@ WITH tt_guc_check AS \
       FROM tt_guc_check tt \
  LEFT JOIN pg_catalog.pg_settings s \
         ON s.name = tt.name \
-     WHERE s.setting IS NULL";
+     WHERE s.setting IS NULL \
+       AND tt.name NOT IN( '" EXTENSION_NAME ".set_uid_function', '" EXTENSION_NAME ".get_uid_function' )";
 
 static const char * clear_guc = "\
 WITH tt_guc_check AS \

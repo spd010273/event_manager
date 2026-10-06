@@ -30,8 +30,10 @@
 ## SECURITY
 
 ### 2026-10-06:
-- Fixed security issue with a local privelege escalation via abuse of implicit REFERENCE GRANT to tb_event_table_work_item_instance. Users are strongly encouraged to execute the following:
-```REVOKE ALL ON event_manager.tb_event_queue FROM public;
+- Fixed security issue with a database privilege escalation via abuse of implicit REFERENCE GRANT to tb_event_table_work_item_instance. A malicious database user could abuse this function to grant themselves the SUPERUSER role. Users are strongly encouraged to execute the following:
+
+```sql
+REVOKE ALL ON event_manager.tb_event_queue FROM public;
 REVOKE ALL ON event_manager.tb_work_queue FROM public;
 GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_queue TO public;
 GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_work_queue TO public;
@@ -40,8 +42,11 @@ GRANT SELECT ON event_manager.tb_statistic TO public;
 REVOKE ALL ON event_manager.tb_event_table_work_item FROM public;
 GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_table_work_item TO public;
 REVOKE ALL ON event_manager.tb_event_table_work_item_instance FROM public;
-GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_table_work_item_instance TO public;```
+GRANT SELECT, INSERT, UPDATE, DELETE ON event_manager.tb_event_table_work_item_instance TO public;
+```
 
-- Fixed security issue where an low priviledge user could override the session_values in queue tables and modify server settings. This has been restricted to any GUC which does not appear in `pg_settings`
+Credited to Zsolt Parragi for discovery of this issue and providing a PoC for debugging purposes.
 
-This impact both version 0.1 and 0.2 of the extension.
+- Fixed security issue where an low privileged user could override the session_values in queue tables and modify server settings. This has been restricted to any GUC which does not appear in `pg_settings`, along with event_manager's set_uid_function and get_uid_function GUCs.
+
+These impact both version 0.1 and 0.2 of the extension.
