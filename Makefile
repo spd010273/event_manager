@@ -57,7 +57,7 @@ endef
 export __VERSION_H_SOURCE
 
 event_manager: version.h src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o
-	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o -g -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl ${DEBUG}
+	$(CC) -o event_manager src/event_manager.o src/lib/util.o src/lib/query_helper.o src/lib/jsmn/jsmn.o -fstack-protector-strong -D_FORTIFY_SOURCE=2 -O1 -fPIE -fcf-protection=full -fstack-clash-protection -I./src/ -I./src/lib/ -I./src/lib/jsmn -L$(PGLIBDIR) -lm -lpq -lcurl ${C_DEBUG}
 
 version.h:
 	./tools/valid_version_check.pl
